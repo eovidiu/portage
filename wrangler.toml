@@ -1,0 +1,15 @@
+name = "portage"
+main = "src/index.ts"
+compatibility_date = "2026-04-25"
+account_id = "dc223a5a0db5a99a0ba194aff0c98c58"
+
+routes = [
+  { pattern = "portage.eovidiu.co.uk/*", zone_id = "136764234985fbfbd0b14286b7bc34e1" }
+]
+
+[triggers]
+crons = ["0 2,14 * * *"]
+
+[vars]
+TIDAL_COUNTRY_CODE = "RO"
+TIDAL_PLAYLIST_TITLE = "Spotify Liked"
