@@ -1,7 +1,7 @@
 {
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
-  "total_features": 14,
+  "total_features": 15,
   "passing": 2,
   "features": [
     {
@@ -43,6 +43,25 @@
       "discovered_via": null
     },
     {
+      "id": "F004b",
+      "spec": "docs/specs/F-004-token-encryption.md",
+      "test_spec": null,
+      "description": "Token persistence helpers (persistTokens, loadTokens) — DB-coupled wrapper around F-004 encryption primitives",
+      "priority": 3,
+      "status": "pending",
+      "scope": ["src/db/provider_tokens.ts", "tests/db/provider_tokens.test.ts"],
+      "depends_on": ["F004"],
+      "assigned_to": null,
+      "test_file": null,
+      "coverage": null,
+      "notes": "Split off from F-004 per Sprint 1 review decision D1. F-004 is encryption primitives only; F-004b owns the provider_tokens read/write path. F-002/F-003 OAuth flows consume this. Schema (status + access_token_iv + refresh_token_iv) was already provisioned in Sprint 1 fix wave (commit bd013a8). T-004-11 and T-004-12 from the original spec apply here.",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [],
+      "failure_reason": null,
+      "discovered_via": "F004"
+    },
+    {
       "id": "F001",
       "spec": "docs/specs/F-001-authentication.md",
       "test_spec": "docs/specs/T-001-authentication.md",
@@ -54,7 +73,7 @@
       "assigned_to": null,
       "test_file": null,
       "coverage": null,
-      "notes": "Hono middleware applied via single use() call. Use jose library. F-014 is a soft dep (auth needs to know which routes to skip — only /healthz and OAuth callbacks).",
+      "notes": "Hono middleware applied via single use() call. Use jose library. F-014 is a soft dep (auth needs to know which routes to skip — only /healthz and OAuth callbacks). Per Sprint 1 review D2, F-001 also owns the startup-time TOKEN_ENCRYPTION_KEY validation (formerly F-004-R5) — single boot-time secrets check.",
       "correction_cycles": 0,
       "scope_expansions": [],
       "approaches_tried": [],

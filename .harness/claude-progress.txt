@@ -13,8 +13,30 @@
 - Spec source of truth: docs/architecture.md + docs/specs/F-NNN-*.md / T-NNN-*.md
 - No code exists yet; specs are complete and authoritative
 
-## Next Session
-- Recommended starting features (no deps, can run in parallel):
-  - F014: Health/status endpoints (/healthz first, /readyz incremental)
-  - F004: Token encryption (AES-256-GCM via Web Crypto)
-- After F004 + F001 ship: F002 and F003 can run in parallel (Spotify and Tidal OAuth are independent)
+## Session 2 - Sprint 1: scaffold + F014 + F004 + DB schema (2026-04-25, Agent Teams)
+- Team: portage-sprint-1 (4 implementer Sonnet teammates + 1 Opus reviewer)
+- Wave 1 (parallel): scaffolder (project bootstrap) + db-init (Neon schema via MCP)
+- Wave 2 (parallel): health (F-014) + crypto (F-004)
+- Wave 3 (single): reviewer (Opus) — produced .harness/reviews/sprint-1.md
+- Wave 4 (parallel, reuse-existing): four fix tasks addressing 2 critical + 5 major + 2 minor review findings
+- Final state: 10 commits on main, 27/27 vitest tests passing, coverage cleared 95% gate
+  - src/crypto: 100/100/100/100
+  - src/routes/health.ts: 100/94.11/100/100
+  - src/index.ts: 75% stmt (scheduled handler unexercised, F-010 hook — acceptable)
+- Neon project square-wave-04443485 (production branch): 7 tables provisioned, provider_tokens corrected with status + per-token IVs
+- Remote: git@github.com:eovidiu/portage.git (configured, not yet pushed — Ovidiu opted to push after Sprint 1 lands)
+- Decisions made and documented (D1-D6, M2): see Meta-Session in context_summary.md
+- Discovered: F-004b (persistence helpers) split from F-004 — added to features.json with discovered_via:F004
+
+## Next Session — Sprint 2 plan
+- F-001 first (auth middleware + bootstrap JWT mint script + startup-time secrets validation per D2)
+  - Recommended: require_plan_approval=true (security-sensitive, all later routes depend on this middleware)
+  - Single teammate, Sonnet (or Opus if security review during plan-approval suggests it)
+- After F-001 lands: F-002 (Spotify OAuth) + F-003 (Tidal OAuth) + F-004b (token persistence) all in parallel
+- Add a Neon-branch integration test to each (per Meta-Patterns: prevents schema/spec drift bugs like Sprint 1's C1)
+- Pre-Sprint-2: push the 10 Sprint 1 commits to origin (Ovidiu's call on timing)
+
+## Outstanding/deferred (tracked, not done)
+- T-014-03 + T-014-11 wall-clock metric tests → Sprint 3 candidate F-Q1 (e2e harness via wrangler dev)
+- Wrangler upgrade (currently 3.99.0, compat-date pinned to 2024-12-30 for local-runtime compat) — bump when Cloudflare ships a wrangler with newer bundled runtime
+- T-004-13 plaintext-token log canary — vacuous in Sprint 1 (no code emits log lines for tokens); revisit when F-002/F-005 ship
