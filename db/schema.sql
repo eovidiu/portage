@@ -1,5 +1,5 @@
 -- Source of truth for portage schema. Apply via Neon MCP or psql.
--- Last applied to project square-wave-04443485 on 2026-04-25.
+-- Last applied to project square-wave-04443485 on 2026-04-25 (updated C1+C2 fix).
 --
 -- Invariants (application-layer enforcement — not DB CHECKs):
 --   I-001: tracks.spotify_id MUST appear in exactly one of matches OR unmatched at any time,
@@ -13,11 +13,15 @@
 --          only after all tracks in a page are persisted (atomic with page persist).
 
 -- Encrypted OAuth tokens. Plaintext MUST NOT be persisted (I-003).
+-- Per F-004-R3: each ciphertext gets its own independent 96-bit IV (GCM nonce reuse
+-- is structurally impossible with separate columns).
 CREATE TABLE IF NOT EXISTS provider_tokens (
     provider                  TEXT PRIMARY KEY,
     access_token_ciphertext   BYTEA NOT NULL,
     refresh_token_ciphertext  BYTEA NOT NULL,
-    iv                        BYTEA NOT NULL,
+    access_token_iv           BYTEA NOT NULL,
+    refresh_token_iv          BYTEA NOT NULL,
+    status                    TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
     expires_at                TIMESTAMPTZ,
     updated_at                TIMESTAMPTZ DEFAULT now()
 );

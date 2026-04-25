@@ -141,7 +141,9 @@ erDiagram
         text provider PK
         bytea access_token_ciphertext
         bytea refresh_token_ciphertext
-        bytea iv
+        bytea access_token_iv
+        bytea refresh_token_iv
+        text status
         timestamptz expires_at
         timestamptz updated_at
     }
@@ -156,6 +158,8 @@ erDiagram
         text context_note
     }
 ```
+
+> **Per F-004-R3**, each encrypted token gets a fresh independent IV; columns are separate (`access_token_iv`, `refresh_token_iv`) so GCM nonce reuse is structurally impossible. `provider_tokens.status` (`active` | `revoked`) tracks token lifecycle.
 
 ### 3.2 Invariants
 
