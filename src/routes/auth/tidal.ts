@@ -4,12 +4,12 @@ import { initiateOAuth, exchangeCode } from "../../providers/tidal/oauth";
 
 const tidalAuthRoutes = new Hono<{ Bindings: Env }>();
 
-tidalAuthRoutes.get("/", async (c) => {
+tidalAuthRoutes.get("/tidal", async (c) => {
   const redirectUrl = await initiateOAuth(c.env);
   return c.redirect(redirectUrl, 302);
 });
 
-tidalAuthRoutes.get("/callback", async (c) => {
+tidalAuthRoutes.get("/tidal/callback", async (c) => {
   const error = c.req.query("error");
   if (error) {
     return c.json({ error: "user_denied" }, 400);

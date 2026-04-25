@@ -423,3 +423,139 @@ describe("refreshTokens — rotated refresh token (R8)", () => {
     vi.unstubAllGlobals();
   });
 });
+
+// T-003-07 additional: invalid_request also marks revoked
+describe("refreshTokens — invalid_request marks revoked (T-003-07 variant)", () => {
+  it("marks tokens revoked and throws TidalReauthRequired on invalid_request", async () => {
+    const env = makeEnv();
+    mockLoadTokens.mockResolvedValueOnce({
+      accessToken: "old-token",
+      refreshToken: "old-rt",
+      expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+      status: "active" as const,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "invalid_request" }), { status: 400 })
+      )
+    );
+
+    await expect(refreshTokens(env as never)).rejects.toThrow(TidalReauthRequired);
+    expect(mockMarkRevoked).toHaveBeenCalledWith(expect.anything(), "tidal");
+
+    vi.unstubAllGlobals();
+  });
+});
+
+// T-003-07b: 5xx on refresh does NOT mark revoked
+describe("refreshTokens — 5xx does not mark revoked (T-003-07b)", () => {
+  it("throws a generic transient error and does NOT call markRevoked on 503", async () => {
+    const env = makeEnv();
+    mockLoadTokens.mockResolvedValueOnce({
+      accessToken: "old-token",
+      refreshToken: "old-rt",
+      expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+      status: "active" as const,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "server_error" }), { status: 503 })
+      )
+    );
+
+    let caught: unknown;
+    try {
+      await refreshTokens(env as never);
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).not.toBeInstanceOf(TidalReauthRequired);
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toContain("503");
+    expect(mockMarkRevoked).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("throws a generic transient error and does NOT call markRevoked on 429", async () => {
+    const env = makeEnv();
+    mockLoadTokens.mockResolvedValueOnce({
+      accessToken: "old-token",
+      refreshToken: "old-rt",
+      expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+      status: "active" as const,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: "rate_limited" }), { status: 429 })
+      )
+    );
+
+    await expect(refreshTokens(env as never)).rejects.not.toBeInstanceOf(TidalReauthRequired);
+    expect(mockMarkRevoked).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+});
+
+// T-003-15: No canary strings in any log output
+describe("Tidal OAuth — no secrets in logs (T-003-15)", () => {
+  it("does not log client_secret, access_token, refresh_token, or code_verifier canaries", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const codeVerifier = "code-verifier-canary";
+    mockConsumeOAuthState.mockResolvedValue({ codeVerifier });
+    mockLoadTokens.mockResolvedValue({
+      accessToken: "ATCANARY",
+      refreshToken: "RTCANARY",
+      expiresAt: new Date(Date.now() + 30 * 1000),
+      status: "active" as const,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            access_token: "ATCANARY",
+            refresh_token: "RTCANARY",
+            expires_in: 3600,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+    );
+
+    const env = makeEnv({ TIDAL_CLIENT_SECRET: "TDSECRETCANARY" });
+
+    await exchangeCode(env as never, "somecode", "validstate").catch(() => {});
+    await refreshTokens(env as never).catch(() => {});
+
+    const allLogs = [
+      ...logSpy.mock.calls.flat(),
+      ...errorSpy.mock.calls.flat(),
+      ...warnSpy.mock.calls.flat(),
+    ]
+      .map((v) => String(v))
+      .join("\n");
+
+    expect(allLogs).not.toContain("TDSECRETCANARY");
+    expect(allLogs).not.toContain("ATCANARY");
+    expect(allLogs).not.toContain("RTCANARY");
+    expect(allLogs).not.toContain("code-verifier-canary");
+
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+    warnSpy.mockRestore();
+    vi.unstubAllGlobals();
+  });
+});

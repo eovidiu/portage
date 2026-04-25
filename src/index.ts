@@ -16,7 +16,7 @@ app.use("*", jwtMiddleware(AUTH_SKIP_PATHS));
 app.get("/", (c) => c.text("portage", 200));
 app.route("/", healthRoutes);
 app.route("/auth", spotifyAuthRoutes);
-app.route("/auth/tidal", tidalAuthRoutes);
+app.route("/auth", tidalAuthRoutes);
 
 export default {
   fetch: app.fetch,
