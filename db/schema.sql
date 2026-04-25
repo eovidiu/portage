@@ -1,0 +1,96 @@
+-- Source of truth for portage schema. Apply via Neon MCP or psql.
+-- Last applied to project square-wave-04443485 on 2026-04-25.
+--
+-- Invariants (application-layer enforcement — not DB CHECKs):
+--   I-001: tracks.spotify_id MUST appear in exactly one of matches OR unmatched at any time,
+--          never both, never neither (after at least one sync attempt).
+--   I-002: matches.tidal_id MUST resolve to a real Tidal track at time of write.
+--   I-003: provider_tokens rows MUST always contain non-null ciphertext; plaintext tokens
+--          MUST NOT exist anywhere except volatile Worker memory during use.
+--   I-004: sync_runs.status MUST be one of 'running','succeeded','failed','partial'.
+--          Terminal states MUST have non-null finished_at.
+--   I-005: The cursor (spotify_added_at high-water mark in sync_state) MUST be advanced
+--          only after all tracks in a page are persisted (atomic with page persist).
+
+-- Encrypted OAuth tokens. Plaintext MUST NOT be persisted (I-003).
+CREATE TABLE IF NOT EXISTS provider_tokens (
+    provider                  TEXT PRIMARY KEY,
+    access_token_ciphertext   BYTEA NOT NULL,
+    refresh_token_ciphertext  BYTEA NOT NULL,
+    iv                        BYTEA NOT NULL,
+    expires_at                TIMESTAMPTZ,
+    updated_at                TIMESTAMPTZ DEFAULT now()
+);
+
+-- Spotify track catalogue cache. spotify_id is the stable PK.
+CREATE TABLE IF NOT EXISTS tracks (
+    spotify_id      TEXT PRIMARY KEY,
+    isrc            TEXT,
+    artist          TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    album           TEXT,
+    duration_ms     INT,
+    spotify_added_at TIMESTAMPTZ NOT NULL,
+    first_seen_at   TIMESTAMPTZ DEFAULT now()
+);
+
+-- One row per sync engine execution.
+-- status CHECK enforces I-004 at the DB layer as well.
+CREATE TABLE IF NOT EXISTS sync_runs (
+    run_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at   TIMESTAMPTZ,
+    status        TEXT NOT NULL CHECK (status IN ('running','succeeded','partial','failed')),
+    tracks_seen   INT DEFAULT 0,
+    matched_isrc  INT DEFAULT 0,
+    matched_fuzzy INT DEFAULT 0,
+    unmatched     INT DEFAULT 0,
+    errors        INT DEFAULT 0
+);
+
+-- Confirmed Spotify→Tidal pairings.
+-- A spotify_id present here MUST NOT appear in unmatched (I-001).
+CREATE TABLE IF NOT EXISTS matches (
+    spotify_id  TEXT PRIMARY KEY REFERENCES tracks(spotify_id),
+    tidal_id    TEXT NOT NULL,
+    method      TEXT NOT NULL CHECK (method IN ('isrc','fuzzy','manual')),
+    confidence  NUMERIC(3,2),
+    matched_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    sync_run_id UUID REFERENCES sync_runs(run_id)
+);
+
+-- Tracks that could not be matched; pending manual review or retry.
+-- A spotify_id present here MUST NOT appear in matches (I-001).
+CREATE TABLE IF NOT EXISTS unmatched (
+    spotify_id      TEXT PRIMARY KEY REFERENCES tracks(spotify_id),
+    reason          TEXT NOT NULL,
+    attempts        INT NOT NULL DEFAULT 0,
+    last_attempt_at TIMESTAMPTZ,
+    status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','matched','skipped'))
+);
+
+-- iOS capture events — optional geo + context for a track.
+CREATE TABLE IF NOT EXISTS captures (
+    capture_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    spotify_id   TEXT REFERENCES tracks(spotify_id),
+    captured_at  TIMESTAMPTZ NOT NULL,
+    location_lat NUMERIC(9,6),
+    location_lng NUMERIC(9,6),
+    source       TEXT,
+    context_note TEXT
+);
+
+-- Key/value store for sync cursor and other runtime state.
+-- The 'cursor' key holds the spotify_added_at high-water mark (I-005).
+CREATE TABLE IF NOT EXISTS sync_state (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_tracks_isrc          ON tracks(isrc) WHERE isrc IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_sync_runs_started_at ON sync_runs(started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_matches_sync_run_id  ON matches(sync_run_id);
+CREATE INDEX IF NOT EXISTS idx_unmatched_status     ON unmatched(status, attempts);
+CREATE INDEX IF NOT EXISTS idx_captures_captured_at ON captures(captured_at DESC);
