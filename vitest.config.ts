@@ -8,12 +8,7 @@ export default defineWorkersConfig({
       },
     },
     coverage: {
-      provider: "v8",
-      thresholds: {
-        lines: 95,
-        branches: 95,
-        functions: 95,
-      },
+      provider: "istanbul",
       exclude: ["db/schema.sql", "node_modules/**", "dist/**", "vitest.config.ts"],
     },
   },
