@@ -3,6 +3,8 @@ import type { Env } from "./env";
 import healthRoutes from "./routes/health";
 import { secretsGuard } from "./middleware/secrets";
 import { jwtMiddleware } from "./middleware/auth";
+import spotifyAuthRoutes from "./routes/auth/spotify";
+import tidalAuthRoutes from "./routes/auth/tidal";
 
 const AUTH_SKIP_PATHS = ["/healthz", "/readyz", "/auth/spotify/callback", "/auth/tidal/callback"];
 
@@ -13,10 +15,8 @@ app.use("*", jwtMiddleware(AUTH_SKIP_PATHS));
 
 app.get("/", (c) => c.text("portage", 200));
 app.route("/", healthRoutes);
-
-// Stub callbacks — replaced by F-002 and F-003 respectively
-app.get("/auth/spotify/callback", (c) => c.json({ error: "not_implemented" }, 400));
-app.get("/auth/tidal/callback", (c) => c.json({ error: "not_implemented" }, 400));
+app.route("/auth", spotifyAuthRoutes);
+app.route("/auth/tidal", tidalAuthRoutes);
 
 export default {
   fetch: app.fetch,
