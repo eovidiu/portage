@@ -1,0 +1,20 @@
+# Claude Progress Log
+# Project: spotify-roon-sync
+# Created: 2026-04-25
+
+## Session 1 - Initialization (2026-04-25)
+- Created harness v3.5.0 scaffolding
+- Stack: TypeScript / Cloudflare Workers / Hono / @neondatabase/serverless / vitest / wrangler
+- Git identity captured: Ovidiu Eftimie <eovidiu@gmail.com>, ~/.ssh/id_ed25519, github.com
+- Loaded 14 features (F-001..F-014) with verified depends_on graph
+- Documented two soft-dep cycles in context_summary.md gotchas:
+  - F-001 ↔ F-014 (auth and health endpoint)
+  - F-009 ↔ F-011 (orchestrator and logging)
+- Spec source of truth: docs/architecture.md + docs/specs/F-NNN-*.md / T-NNN-*.md
+- No code exists yet; specs are complete and authoritative
+
+## Next Session
+- Recommended starting features (no deps, can run in parallel):
+  - F014: Health/status endpoints (/healthz first, /readyz incremental)
+  - F004: Token encryption (AES-256-GCM via Web Crypto)
+- After F004 + F001 ship: F002 and F003 can run in parallel (Spotify and Tidal OAuth are independent)

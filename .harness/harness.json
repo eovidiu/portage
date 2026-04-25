@@ -1,0 +1,92 @@
+{
+  "project": "spotify-roon-sync",
+  "stack": "typescript",
+  "runtime": "cloudflare-workers",
+  "framework": "hono",
+  "database": "neon-postgres",
+  "db_driver": "@neondatabase/serverless",
+  "test_runner": "vitest",
+  "deploy_tool": "wrangler",
+  "created": "2026-04-25",
+  "version": "3.5.0",
+  "git_identity": {
+    "user_name": "Ovidiu Eftimie",
+    "user_email": "eovidiu@gmail.com",
+    "ssh_key": "~/.ssh/id_ed25519",
+    "ssh_host": "github.com"
+  },
+  "worker_domain": "portage.eovidiu.co.uk",
+  "team_structure": {
+    "mode": "agent-teams",
+    "policy": "max-parallelization",
+    "current_sprint": 1,
+    "sprints": [
+      {
+        "id": 1,
+        "features": ["F014", "F004"],
+        "rationale": "Both have zero deps. F014 (health) and F004 (encryption) are fully independent.",
+        "teammates": [
+          {
+            "role": "scaffolder",
+            "scope": ["package.json", "tsconfig.json", "wrangler.toml", "vitest.config.ts", "src/index.ts", "src/env.ts", ".dev.vars.example"],
+            "features": [],
+            "model": "sonnet",
+            "require_plan_approval": false,
+            "notes": "Project bootstrap: install Hono + jose + @neondatabase/serverless + vitest, wire Worker entry, expose typed env. Runs first; F014 and F004 teammates depend on this."
+          },
+          {
+            "role": "health",
+            "scope": ["src/routes/health.ts", "tests/routes/health.test.ts"],
+            "features": ["F014"],
+            "model": "sonnet",
+            "require_plan_approval": false
+          },
+          {
+            "role": "crypto",
+            "scope": ["src/crypto/", "tests/crypto/"],
+            "features": ["F004"],
+            "model": "sonnet",
+            "require_plan_approval": false
+          },
+          {
+            "role": "db-init",
+            "scope": ["db/schema.sql", "db/migrations/"],
+            "features": [],
+            "model": "sonnet",
+            "require_plan_approval": false,
+            "notes": "Provisions Neon database (via Neon MCP using NEON_API_KEY) and writes the schema migrations needed across F004/F005/F006/F009/F011/F012/F013. Independent of code teammates."
+          },
+          {
+            "role": "reviewer",
+            "scope": [],
+            "features": [],
+            "model": "opus",
+            "require_plan_approval": false,
+            "notes": "Reviews scaffolder + health + crypto + db-init outputs after each marks complete."
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "features": ["F001", "F002", "F003"],
+        "rationale": "F001 (auth) blocks F002/F003. F002 and F003 are independent of each other and can run in parallel after F001.",
+        "teammates_planned": "F001 first (single teammate), then F002 + F003 in parallel."
+      },
+      {
+        "id": 3,
+        "features": ["F005", "F006", "F007", "F008"],
+        "rationale": "F005 first, then F006, then F007 + F008 in parallel."
+      },
+      {
+        "id": 4,
+        "features": ["F009", "F011", "F012", "F013"],
+        "rationale": "F011 read endpoints first, then F009 orchestrator. F012 and F013 in parallel after."
+      },
+      {
+        "id": 5,
+        "features": ["F010"],
+        "rationale": "Cron shim. Single teammate."
+      }
+    ]
+  }
+}

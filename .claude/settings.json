@@ -1,0 +1,66 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/enforce-scope.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/verify-git-identity.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(cat | jq -r '.tool_input.file_path // empty'); if [ -n \"$FILE\" ]; then ext=\"${FILE##*.}\"; if [ \"$ext\" = \"ts\" ] || [ \"$ext\" = \"tsx\" ]; then npx tsc --noEmit 2>&1 | head -20; fi; fi",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/verify-task-quality.sh"
+          }
+        ]
+      }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-remaining-tasks.sh"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Context was just compacted. Immediately re-read .harness/context_summary.md and run TaskList to recover your current state before continuing work. If this is the third or more compaction in rapid succession and you are losing context each time, STOP: write your current progress and known state to .harness/context_summary.md, message the lead with SendMessage({ type: 'message', recipient: 'team-lead', content: 'Context collapse: repeated compaction losing state. Current feature [ID] progress saved to context_summary.md. Need intervention.' }), then wait for instructions."
+          }
+        ]
+      }
+    ]
+  }
+}
