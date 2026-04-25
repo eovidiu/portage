@@ -264,7 +264,11 @@ describe("tidalFetch — no tokens", () => {
       status: "active" as const,
     };
 
+    // Call order: (1) tidalFetch initial load → expiredTokens triggers refresh
+    // (2) _doRefresh loadTokens → expiredTokens (so refresh proceeds)
+    // (3) tidalFetch post-refresh loadTokens → null (triggers line 22)
     mockLoadTokens
+      .mockResolvedValueOnce(expiredTokens)
       .mockResolvedValueOnce(expiredTokens)
       .mockResolvedValueOnce(null);
 
@@ -309,6 +313,44 @@ describe("tidalFetch — no tokens", () => {
     await expect(
       tidalFetch(env as never, "https://openapi.tidal.com/v2/artists/1")
     ).rejects.toThrow(TidalReauthRequired);
+
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("tidalFetch — countryCode fallback", () => {
+  it("defaults countryCode to RO when TIDAL_COUNTRY_CODE is not set", async () => {
+    const env = makeEnv({ TIDAL_COUNTRY_CODE: "" });
+    mockLoadTokens.mockResolvedValue(activeTokens());
+
+    let capturedUrl: string | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((req: Request) => {
+        capturedUrl = req.url;
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      })
+    );
+
+    await tidalFetch(env as never, "https://openapi.tidal.com/v2/artists/1");
+    expect(capturedUrl).toContain("countryCode=RO");
+
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("tidalFetch — null content-type header", () => {
+  it("does not crash when response has no content-type header", async () => {
+    const env = makeEnv();
+    mockLoadTokens.mockResolvedValue(activeTokens());
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(new Response("{}", { status: 200 }))
+    );
+
+    const res = await tidalFetch(env as never, "https://openapi.tidal.com/v2/artists/1");
+    expect(res.status).toBe(200);
 
     vi.unstubAllGlobals();
   });

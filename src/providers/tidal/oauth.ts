@@ -146,8 +146,15 @@ async function _doRefresh(env: Env): Promise<void> {
   );
 
   if (!response.ok) {
-    await markRevoked(env, "tidal");
-    throw new TidalReauthRequired();
+    const errorData = await response.json().catch(() => ({})) as Record<string, unknown>;
+    if (
+      response.status === 400 &&
+      (errorData.error === "invalid_grant" || errorData.error === "invalid_request")
+    ) {
+      await markRevoked(env, "tidal");
+      throw new TidalReauthRequired();
+    }
+    throw new Error(`tidal refresh transient: ${response.status}`);
   }
 
   const data = (await response.json()) as {
