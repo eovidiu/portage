@@ -1,7 +1,4 @@
-// F-004b stub interface — full implementation by the F-004b teammate.
-// The oauth_state table itself is added to db/schema.sql + Neon by F-004b.
-// F-002 and F-003 import these signatures to develop in parallel.
-
+import { neon } from "@neondatabase/serverless";
 import type { Env } from "../env";
 
 export interface OAuthStateRecord {
@@ -11,19 +8,38 @@ export interface OAuthStateRecord {
 }
 
 export async function storeOAuthState(
-  _env: Env,
-  _record: OAuthStateRecord,
+  env: Env,
+  record: OAuthStateRecord,
 ): Promise<void> {
-  throw new Error("F-004b not implemented");
+  const sql = neon(env.DATABASE_URL);
+
+  await sql(
+    `INSERT INTO oauth_state (state, code_verifier, expires_at)
+     VALUES ($1, $2, $3)`,
+    [record.state, record.codeVerifier, record.expiresAt],
+  );
 }
 
 export async function consumeOAuthState(
-  _env: Env,
-  _state: string,
+  env: Env,
+  state: string,
 ): Promise<{ codeVerifier: string } | null> {
-  throw new Error("F-004b not implemented");
+  const sql = neon(env.DATABASE_URL);
+
+  // Single atomic statement: deletes the row only if not expired, returns code_verifier
+  const rows = await sql(
+    `DELETE FROM oauth_state
+     WHERE state = $1 AND expires_at > now()
+     RETURNING code_verifier`,
+    [state],
+  );
+
+  if (rows.length === 0) return null;
+  return { codeVerifier: rows[0].code_verifier as string };
 }
 
-export async function purgeExpiredOAuthState(_env: Env): Promise<void> {
-  throw new Error("F-004b not implemented");
+export async function purgeExpiredOAuthState(env: Env): Promise<void> {
+  const sql = neon(env.DATABASE_URL);
+
+  await sql(`DELETE FROM oauth_state WHERE expires_at < now()`, []);
 }
