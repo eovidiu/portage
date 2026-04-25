@@ -6,9 +6,11 @@
     "dev": "wrangler dev",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "test:e2e": "bash scripts/run-e2e.sh"
   },
   "dependencies": {
     "hono": "^4.0.0",
