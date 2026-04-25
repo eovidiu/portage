@@ -1,0 +1,27 @@
+# Secrets
+.env
+.env.local
+.dev.vars
+
+# Dependencies
+node_modules/
+
+# Build artifacts
+dist/
+.wrangler/
+*.tsbuildinfo
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Test coverage
+coverage/
+*.lcov
+
+# Logs
+*.log
+npm-debug.log*
