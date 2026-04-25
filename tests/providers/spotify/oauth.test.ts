@@ -13,6 +13,7 @@ import {
   handleCallback,
   ensureFreshToken,
   spotifyFetch,
+  refreshSpotify,
   SpotifyAuthError,
 } from "../../../src/providers/spotify/oauth";
 import {
@@ -453,6 +454,128 @@ describe("spotifyFetch — 401 refresh + retry (T-002-14)", () => {
     const res = await spotifyFetch(env, "https://api.spotify.com/v1/me/tracks");
     expect(res.status).toBe(200);
     expect(targetCallCount).toBe(2);
+  });
+});
+
+// T-002-12b: Mixed-path coalescing — concurrent calls through refreshSpotify share one in-flight POST
+describe("refreshSpotify — mixed-path coalescing (T-002-12b)", () => {
+  it("concurrent refreshSpotify calls (from both ensureFreshToken and 401 retry) coalesce to one POST", async () => {
+    const nearExpiry = new Date(Date.now() + 30 * 1000);
+    const freshExpiry = new Date(Date.now() + 3600 * 1000);
+    let refreshPostCount = 0;
+
+    mockLoadTokens.mockImplementation(async () => {
+      if (refreshPostCount === 0) {
+        return { accessToken: "OLD_AT", refreshToken: "rt", expiresAt: nearExpiry, status: "active" as const };
+      }
+      return { accessToken: "NEW_AT", refreshToken: "rt2", expiresAt: freshExpiry, status: "active" as const };
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => {
+        refreshPostCount++;
+        await new Promise((r) => setTimeout(r, 30));
+        return new Response(
+          JSON.stringify({ access_token: "NEW_AT", refresh_token: "rt2", expires_in: 3600 }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }),
+    );
+
+    const env = makeEnv();
+    // Call refreshSpotify concurrently from multiple paths — simulates ensureFreshToken + 401 retry both hitting it
+    await Promise.all([
+      refreshSpotify(env),
+      refreshSpotify(env),
+      refreshSpotify(env),
+    ]);
+
+    expect(refreshPostCount).toBe(1);
+  });
+});
+
+// T-002-14b: spotifyFetch returns 200 on first try (happy path — no refresh needed)
+describe("spotifyFetch — happy path 200 first try (T-002-14b)", () => {
+  it("returns 200 response without calling refresh endpoint when token is fresh", async () => {
+    const farExpiry = new Date(Date.now() + 7200 * 1000);
+    mockLoadTokens.mockResolvedValue({
+      accessToken: "FRESH_AT",
+      refreshToken: "rt",
+      expiresAt: farExpiry,
+      status: "active",
+    });
+
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", mockFetch);
+
+    const env = makeEnv();
+    const res = await spotifyFetch(env, "https://api.spotify.com/v1/me/tracks");
+    expect(res.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledOnce();
+  });
+});
+
+// Coverage: handleCallback missing-state branch (L101)
+describe("handleCallback — missing state param (coverage)", () => {
+  it("throws invalid_state when state param is absent and no error param", async () => {
+    const env = makeEnv();
+    await expect(
+      handleCallback(env, { code: "somecode" }),
+    ).rejects.toMatchObject({ code: "invalid_state" });
+  });
+});
+
+// Coverage: handleCallback missing-code branch (L110)
+describe("handleCallback — missing code (coverage)", () => {
+  it("throws token_exchange_failed when code is absent but state is valid", async () => {
+    mockConsumeOAuthState.mockResolvedValue({ codeVerifier: "verifier" });
+    const env = makeEnv();
+    await expect(
+      handleCallback(env, { state: "validstate" }),
+    ).rejects.toMatchObject({ code: "token_exchange_failed" });
+  });
+});
+
+// Coverage: ensureFreshToken no-tokens branch (L201)
+describe("ensureFreshToken — no tokens (coverage)", () => {
+  it("throws reauth_required when loadTokens returns null", async () => {
+    mockLoadTokens.mockResolvedValue(null);
+    const env = makeEnv();
+    await expect(ensureFreshToken(env)).rejects.toMatchObject({ code: "reauth_required" });
+  });
+});
+
+// Coverage: _doRefresh no-tokens branch (L147) via direct refreshSpotify call
+describe("refreshSpotify — no tokens (coverage)", () => {
+  it("throws reauth_required when loadTokens returns null", async () => {
+    mockLoadTokens.mockResolvedValue(null);
+    const env = makeEnv();
+    await expect(refreshSpotify(env)).rejects.toMatchObject({ code: "reauth_required" });
+  });
+});
+
+// Coverage: _doRefresh non-400 failure branch (L170)
+describe("refreshSpotify — non-400 failure (coverage)", () => {
+  it("throws refresh_failed on non-400 non-invalid_grant error", async () => {
+    const nearExpiry = new Date(Date.now() + 30 * 1000);
+    mockLoadTokens.mockResolvedValue({
+      accessToken: "AT",
+      refreshToken: "RT",
+      expiresAt: nearExpiry,
+      status: "active",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("server error", { status: 500 })),
+    );
+    const env = makeEnv();
+    await expect(ensureFreshToken(env)).rejects.toMatchObject({ code: "refresh_failed" });
   });
 });
 

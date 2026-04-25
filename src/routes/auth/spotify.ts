@@ -21,10 +21,8 @@ spotifyAuthRoutes.get("/spotify/callback", async (c) => {
     await handleCallback(c.env, { code, state, error });
     return c.json({ status: "connected", provider: "spotify" }, 200);
   } catch (err) {
-    if (err instanceof SpotifyAuthError) {
-      return c.json({ error: err.code }, 400);
-    }
-    return c.json({ error: "token_exchange_failed" }, 400);
+    const code_ = err instanceof SpotifyAuthError ? err.code : "token_exchange_failed";
+    return c.json({ error: code_ }, 400);
   }
 });
 
