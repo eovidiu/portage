@@ -1,6 +1,7 @@
 name = "portage"
 main = "src/index.ts"
 compatibility_date = "2026-04-25"
+compatibility_flags = ["nodejs_compat"]
 account_id = "dc223a5a0db5a99a0ba194aff0c98c58"
 
 routes = [
