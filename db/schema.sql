@@ -92,7 +92,17 @@ CREATE TABLE IF NOT EXISTS sync_state (
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- OAuth PKCE state store. Rows are short-lived (TTL enforced by expires_at).
+-- consumeOAuthState deletes atomically; purgeExpiredOAuthState cleans up strays.
+CREATE TABLE IF NOT EXISTS oauth_state (
+    state         TEXT PRIMARY KEY,
+    code_verifier TEXT NOT NULL,
+    expires_at    TIMESTAMPTZ NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Indexes
+CREATE INDEX IF NOT EXISTS idx_oauth_state_expires_at ON oauth_state(expires_at);
 CREATE INDEX IF NOT EXISTS idx_tracks_isrc          ON tracks(isrc) WHERE isrc IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sync_runs_started_at ON sync_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_matches_sync_run_id  ON matches(sync_run_id);
