@@ -28,6 +28,13 @@ Two unauthenticated endpoints expose system health: `GET /healthz` for liveness 
 - **When** the client calls `GET /readyz`
 - **Then** the response is HTTP 200 with detailed status
 
+### Readiness, bootstrap (no OAuth completed yet)
+
+- **Given** Neon is reachable and all secrets are present, but no rows exist in `provider_tokens` (initial deployment before any OAuth flow has run)
+- **When** the client calls `GET /readyz`
+- **Then** the response is HTTP 200 with `tokens.spotify = "missing"` and `tokens.tidal = "missing"`
+- **Rationale**: ensures uptime monitoring stays green during initial OAuth setup; "missing" is a transient bootstrap state, not a service failure
+
 ### Readiness, database down
 
 - **Given** Neon is unreachable
@@ -56,7 +63,7 @@ Two unauthenticated endpoints expose system health: `GET /healthz` for liveness 
 | F-014-R3 | `GET /readyz` MUST execute a `SELECT 1` against the database with a 2-second timeout. |
 | F-014-R4 | `GET /readyz` MUST check the presence of all required secrets listed in architecture §9.4. |
 | F-014-R5 | `GET /readyz` MUST check `provider_tokens.status` for both `spotify` and `tidal`. |
-| F-014-R6 | `GET /readyz` MUST return HTTP 200 only when database, secrets, and tokens are all green. |
+| F-014-R6 | `GET /readyz` MUST return HTTP 200 only when database, secrets, and tokens are all green. A token status of `"missing"` (no row in `provider_tokens`) counts as green for readiness purposes — it is a bootstrap state, not a failure. |
 | F-014-R7 | `GET /readyz` MUST return HTTP 503 with a JSON body explaining which checks failed when not green. |
 | F-014-R8 | Neither endpoint MUST exceed a 3-second response time. |
 | F-014-R9 | The response body of `/readyz` MUST NOT contain any secret value, ciphertext, IV, plaintext token, or database connection string. |

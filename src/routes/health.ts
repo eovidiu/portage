@@ -34,39 +34,26 @@ health.get("/readyz", async (c) => {
   let dbOk = false;
   let tokens: Record<string, string> = { spotify: "missing", tidal: "missing" };
 
+  // AbortController can't cancel the underlying neon HTTP fetch; plain setTimeout is sufficient.
+  const timeout = (): Promise<never> =>
+    new Promise((_, reject) => setTimeout(() => reject(new Error("DB timeout")), DB_TIMEOUT_MS));
+
   try {
     const sql = neon(env.DATABASE_URL);
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), DB_TIMEOUT_MS);
 
-    try {
-      await Promise.race([
-        sql`SELECT 1`,
-        new Promise<never>((_, reject) =>
-          controller.signal.addEventListener("abort", () =>
-            reject(new Error("DB timeout"))
-          )
-        ),
-      ]);
-      dbOk = true;
+    await Promise.race([sql`SELECT 1`, timeout()]);
+    dbOk = true;
 
-      const rows = await Promise.race<TokenRow[]>([
-        (sql`SELECT provider, status FROM provider_tokens WHERE provider IN ('spotify', 'tidal')` as unknown) as Promise<TokenRow[]>,
-        new Promise<never>((_, reject) =>
-          controller.signal.addEventListener("abort", () =>
-            reject(new Error("DB timeout"))
-          )
-        ),
-      ]);
+    const rows = (await Promise.race([
+      sql`SELECT provider, status FROM provider_tokens WHERE provider IN ('spotify', 'tidal')`,
+      timeout(),
+    ])) as TokenRow[];
 
-      tokens = { spotify: "missing", tidal: "missing" };
-      for (const row of rows) {
-        if (row.provider === "spotify" || row.provider === "tidal") {
-          tokens[row.provider] = row.status;
-        }
+    tokens = { spotify: "missing", tidal: "missing" };
+    for (const row of rows) {
+      if (row.provider === "spotify" || row.provider === "tidal") {
+        tokens[row.provider] = row.status;
       }
-    } finally {
-      clearTimeout(timer);
     }
   } catch {
     dbOk = false;
