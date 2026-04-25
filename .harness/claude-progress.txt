@@ -7,36 +7,50 @@
 - Stack: TypeScript / Cloudflare Workers / Hono / @neondatabase/serverless / vitest / wrangler
 - Git identity captured: Ovidiu Eftimie <eovidiu@gmail.com>, ~/.ssh/id_ed25519, github.com
 - Loaded 14 features (F-001..F-014) with verified depends_on graph
-- Documented two soft-dep cycles in context_summary.md gotchas:
-  - F-001 ↔ F-014 (auth and health endpoint)
-  - F-009 ↔ F-011 (orchestrator and logging)
-- Spec source of truth: docs/architecture.md + docs/specs/F-NNN-*.md / T-NNN-*.md
-- No code exists yet; specs are complete and authoritative
+- Documented two soft-dep cycles: F-001↔F-014 (auth/health), F-009↔F-011 (orchestrator/logging)
 
-## Session 2 - Sprint 1: scaffold + F014 + F004 + DB schema (2026-04-25, Agent Teams)
+## Session 2 - Sprint 1: scaffold + F014 + F004 + DB schema (2026-04-25)
 - Team: portage-sprint-1 (4 implementer Sonnet teammates + 1 Opus reviewer)
-- Wave 1 (parallel): scaffolder (project bootstrap) + db-init (Neon schema via MCP)
+- Wave 1 (parallel): scaffolder + db-init
 - Wave 2 (parallel): health (F-014) + crypto (F-004)
-- Wave 3 (single): reviewer (Opus) — produced .harness/reviews/sprint-1.md
-- Wave 4 (parallel, reuse-existing): four fix tasks addressing 2 critical + 5 major + 2 minor review findings
-- Final state: 10 commits on main, 27/27 vitest tests passing, coverage cleared 95% gate
-  - src/crypto: 100/100/100/100
-  - src/routes/health.ts: 100/94.11/100/100
-  - src/index.ts: 75% stmt (scheduled handler unexercised, F-010 hook — acceptable)
-- Neon project square-wave-04443485 (production branch): 7 tables provisioned, provider_tokens corrected with status + per-token IVs
-- Remote: git@github.com:eovidiu/portage.git (configured, not yet pushed — Ovidiu opted to push after Sprint 1 lands)
-- Decisions made and documented (D1-D6, M2): see Meta-Session in context_summary.md
-- Discovered: F-004b (persistence helpers) split from F-004 — added to features.json with discovered_via:F004
+- Wave 3 (Opus reviewer): produced .harness/reviews/sprint-1.md (BLOCK-AND-FIX, 2 critical + 5 major + 7 minor)
+- Wave 4 (parallel reuse-existing): four fix tasks → all resolved
+- Final state: 11 commits on main, 27/27 vitest tests passing, coverage cleared 95% gate
+- Pushed to origin/main on session close (per Ovidiu)
 
-## Next Session — Sprint 2 plan
-- F-001 first (auth middleware + bootstrap JWT mint script + startup-time secrets validation per D2)
-  - Recommended: require_plan_approval=true (security-sensitive, all later routes depend on this middleware)
-  - Single teammate, Sonnet (or Opus if security review during plan-approval suggests it)
-- After F-001 lands: F-002 (Spotify OAuth) + F-003 (Tidal OAuth) + F-004b (token persistence) all in parallel
-- Add a Neon-branch integration test to each (per Meta-Patterns: prevents schema/spec drift bugs like Sprint 1's C1)
-- Pre-Sprint-2: push the 10 Sprint 1 commits to origin (Ovidiu's call on timing)
+## Session 3 - Sprint 2: F-001 + F-002 + F-003 + F-004b (2026-04-25)
+- Team: portage-sprint-2 (initially 4 implementers + 1 Opus reviewer; then 2 reused for fix wave)
+- Wave 1 (sequential, plan-approval gated): F-001 (auth + bootstrap mint + secrets guard, 21 tests, ~96% coverage)
+- Wave 2 (3-way parallel via stub-then-replace pattern): F-004b + F-002 + F-003
+  - Lead pre-commit 7aaff41: stub interfaces for src/db/provider_tokens.ts + src/db/oauth_state.ts
+  - F-004b implemented bodies; F-002/F-003 imported stubs and mocked in tests
+- Wave 3 (Opus reviewer): produced .harness/reviews/sprint-2.md (SHIP-WITH-FOLLOW-UPS)
+  - 0 critical / 5 major (M1 R7 coalescing, M2 indiscriminate revoke, M3 coverage gap, M4 mock-only integration, M5 route asymmetry)
+  - 10 minor + 7 outstanding decisions for the lead
+- Wave 4 (parallel reuse-existing fix wave): spotify + tidal teammates resolved M1+M2+M3+M5+T-003-15 canary
+- Final state: 16 commits on main (5 new since Sprint 1 push), 148/148 tests passing
+  - F001 status=passing, src/auth 95.83% / src/middleware 97.5%
+  - F002 status=passing (after fix wave), oauth.ts 98.9% / route 100%
+  - F003 status=passing, providers/tidal 98.92% / route 100%
+  - F004b status=passing, src/db 100%
+- Decisions logged: D1-D7 from Sprint 2 review (in .harness/reviews/sprint-2.md and context_summary.md Meta-Session 2026-04-25 (Sprint 2))
+- Discovered (Sprint 3 candidates):
+  - F-Integ: Neon-branch integration test for OAuth↔F-004b round-trip (closes M4)
+  - F-Q1: e2e wall-clock harness against wrangler dev (T-001-10, T-014-03, T-014-11, large-sample entropy tests)
+- Harness observation: `isolation: "worktree"` in Task() spawn is currently a no-op; dropped from future spawn prompts. File harness bug separately.
+
+## Next Session — Sprint 3 plan
+1. **F-Integ first** (single teammate, ~80 LOC per provider): integration test exercising OAuth callback → F-004b real persist via Neon branch. Closes the same bug class as Sprint 1 C1.
+2. **Then F-005** (Spotify Liked Songs incremental fetch with cursor): single teammate, well-scoped. F-002 + F-004 + F-004b all live; ready to consume.
+3. **F-Q1 in parallel** if capacity permits: wall-clock e2e harness against wrangler dev. Picks up all the deferred metric tests.
+4. **Pre-Sprint-3**: push the 5 Sprint 2 commits to origin (Ovidiu's call on timing).
+5. **Tidal scope verification reminder**: Ovidiu owns confirming `playlists.read playlists.write user.read collection.read collection.write search.read` against his Tidal Developer Portal app config before any production deploy that runs an OAuth handshake. TODO is in src/providers/tidal/scopes.ts.
 
 ## Outstanding/deferred (tracked, not done)
-- T-014-03 + T-014-11 wall-clock metric tests → Sprint 3 candidate F-Q1 (e2e harness via wrangler dev)
-- Wrangler upgrade (currently 3.99.0, compat-date pinned to 2024-12-30 for local-runtime compat) — bump when Cloudflare ships a wrangler with newer bundled runtime
-- T-004-13 plaintext-token log canary — vacuous in Sprint 1 (no code emits log lines for tokens); revisit when F-002/F-005 ship
+- T-014-03 + T-014-11 wall-clock metric tests → F-Q1
+- T-001-10 latency p95 < 5ms → F-Q1
+- T-002-02/03 + T-003-02 large-sample (1000-iteration) entropy/uniqueness → F-Q1
+- F-002/F-003 → F-004b real-DB integration test → F-Integ
+- T-004-13 plaintext-token log canary — vacuous in Sprint 1+2 (no code emits log lines for tokens); will be exercised in F-005 when sync paths log
+- Wrangler upgrade (compat-date currently pinned to 2024-12-30 for local-runtime compat) — bump when Cloudflare ships a wrangler with newer bundled runtime
+- Live Neon `\d` verification of provider_tokens + oauth_state (Sprint 2 D5 — soft, db/schema.sql comment is sufficient evidence)
