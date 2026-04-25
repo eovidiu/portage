@@ -141,7 +141,7 @@ export async function handleCallback(
   await persistTokens(env, "spotify", data.access_token, data.refresh_token, expiresAt);
 }
 
-async function doRefresh(env: Env): Promise<void> {
+async function _doRefresh(env: Env): Promise<void> {
   const tokens = await loadTokens(env, "spotify");
   if (!tokens) {
     throw new SpotifyAuthError("reauth_required", "No Spotify tokens found");
@@ -181,6 +181,19 @@ async function doRefresh(env: Env): Promise<void> {
   await persistTokens(env, "spotify", data.access_token, newRefreshToken, expiresAt);
 }
 
+// R7: coalesced refresh — checks Map first, reuses in-flight promise if present
+export function refreshSpotify(env: Env): Promise<void> {
+  const existing = refreshInFlight.get("spotify");
+  if (existing) {
+    return existing;
+  }
+  const promise = _doRefresh(env).finally(() => {
+    refreshInFlight.delete("spotify");
+  });
+  refreshInFlight.set("spotify", promise);
+  return promise;
+}
+
 // R6 + R7: proactive refresh with coalescing
 export async function ensureFreshToken(env: Env): Promise<string> {
   const tokens = await loadTokens(env, "spotify");
@@ -194,20 +207,10 @@ export async function ensureFreshToken(env: Env): Promise<string> {
     return tokens.accessToken;
   }
 
-  // R7: coalesce concurrent refresh attempts
-  let inflight = refreshInFlight.get("spotify");
-  if (!inflight) {
-    inflight = doRefresh(env).finally(() => refreshInFlight.delete("spotify"));
-    refreshInFlight.set("spotify", inflight);
-  }
-
-  await inflight;
+  await refreshSpotify(env);
 
   const refreshed = await loadTokens(env, "spotify");
-  if (!refreshed) {
-    throw new SpotifyAuthError("reauth_required", "Tokens missing after refresh");
-  }
-  return refreshed.accessToken;
+  return refreshed!.accessToken;
 }
 
 // R10 + R11: make an authorized Spotify API request with 401-retry-once
@@ -225,18 +228,12 @@ export async function spotifyFetch(
   const response = await fetch(url, { ...init, headers });
 
   if (response.status === 401) {
-    // R11: refresh once and retry once
-    const inFlight = doRefresh(env).finally(() => refreshInFlight.delete("spotify"));
-    refreshInFlight.set("spotify", inFlight);
-    await inFlight;
+    // R11: refresh once (coalesced) and retry once
+    await refreshSpotify(env);
 
     const retryToken = await loadTokens(env, "spotify");
-    if (!retryToken) {
-      throw new SpotifyAuthError("reauth_required", "No tokens after 401 refresh");
-    }
-
     const retryHeaders = new Headers(init.headers);
-    retryHeaders.set("Authorization", `Bearer ${retryToken.accessToken}`);
+    retryHeaders.set("Authorization", `Bearer ${retryToken!.accessToken}`);
     retryHeaders.set("User-Agent", USER_AGENT);
     return fetch(url, { ...init, headers: retryHeaders });
   }

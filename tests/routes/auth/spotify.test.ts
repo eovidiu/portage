@@ -5,9 +5,14 @@ import type { Env } from "../../../src/env";
 
 vi.mock("../../../src/db/provider_tokens");
 vi.mock("../../../src/db/oauth_state");
+vi.mock("../../../src/providers/spotify/oauth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/providers/spotify/oauth")>();
+  return { ...actual };
+});
 
 import { storeOAuthState, consumeOAuthState, purgeExpiredOAuthState } from "../../../src/db/oauth_state";
 import { persistTokens } from "../../../src/db/provider_tokens";
+import * as spotifyOAuth from "../../../src/providers/spotify/oauth";
 
 const mockStoreOAuthState = vi.mocked(storeOAuthState);
 const mockConsumeOAuthState = vi.mocked(consumeOAuthState);
@@ -178,6 +183,15 @@ describe("GET /auth/spotify/callback — token exchange failure", () => {
       "fetch",
       vi.fn().mockResolvedValue(new Response("bad request", { status: 400 })),
     );
+
+    const res = await doFetch("/auth/spotify/callback?state=s&code=c");
+    expect(res.status).toBe(400);
+    const body = await res.json() as Record<string, unknown>;
+    expect(body).toEqual({ error: "token_exchange_failed" });
+  });
+
+  it("returns 400 token_exchange_failed for unexpected (non-SpotifyAuthError) throws (coverage L24)", async () => {
+    vi.spyOn(spotifyOAuth, "handleCallback").mockRejectedValue(new Error("unexpected"));
 
     const res = await doFetch("/auth/spotify/callback?state=s&code=c");
     expect(res.status).toBe(400);
