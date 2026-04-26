@@ -10,7 +10,7 @@ const VALID_PERIODS = new Set(["day", "week", "month"]);
 statsRoute.get("/stats", async (c) => {
   const period = c.req.query("period");
   if (!period || !VALID_PERIODS.has(period)) {
-    return c.json({ error: "invalid_period", message: "period must be day, week, or month" }, 400);
+    return c.json({ error: "invalid_period" }, 400);
   }
 
   try {

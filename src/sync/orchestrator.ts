@@ -165,7 +165,16 @@ async function runSyncBody(
     );
   }
 
-  const status = totalErrors > 0 ? "partial" : "succeeded";
+  // F-009 spec: status='partial' requires errors>0 AND progress>0; with
+  // errors but zero progress, the run is 'failed' per the state-machine
+  // diagram in architecture.md §8.1.
+  const progress =
+    isrcResult.matched +
+    fuzzyResult.matched +
+    tracksUnmatched +
+    isrcResult.skipped;
+  const status =
+    totalErrors > 0 ? (progress > 0 ? "partial" : "failed") : "succeeded";
   const finishedAt = new Date().toISOString();
 
   await updateRun(env, runId, {
