@@ -5,6 +5,10 @@ import { secretsGuard } from "./middleware/secrets";
 import { jwtMiddleware } from "./middleware/auth";
 import spotifyAuthRoutes from "./routes/auth/spotify";
 import tidalAuthRoutes from "./routes/auth/tidal";
+import syncStatusRoute from "./routes/sync/status";
+import syncRunsRoute from "./routes/sync/runs";
+import syncRunRoute from "./routes/sync/run";
+import statsRoute from "./routes/stats";
 
 const AUTH_SKIP_PATHS = ["/healthz", "/readyz", "/auth/spotify/callback", "/auth/tidal/callback"];
 
@@ -17,6 +21,10 @@ app.get("/", (c) => c.text("portage", 200));
 app.route("/", healthRoutes);
 app.route("/auth", spotifyAuthRoutes);
 app.route("/auth", tidalAuthRoutes);
+app.route("/sync", syncStatusRoute);
+app.route("/sync", syncRunsRoute);
+app.route("/sync", syncRunRoute);
+app.route("/", statsRoute);
 
 export default {
   fetch: app.fetch,

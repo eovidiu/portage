@@ -45,12 +45,15 @@ CREATE TABLE IF NOT EXISTS sync_runs (
     started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     finished_at   TIMESTAMPTZ,
     status        TEXT NOT NULL CHECK (status IN ('running','succeeded','partial','failed')),
+    error_code    TEXT,
     tracks_seen   INT DEFAULT 0,
     matched_isrc  INT DEFAULT 0,
     matched_fuzzy INT DEFAULT 0,
     unmatched     INT DEFAULT 0,
     errors        INT DEFAULT 0
 );
+-- Added by F-009: error_code captures the terminal failure reason (e.g. 'spotify_reauth_required').
+ALTER TABLE sync_runs ADD COLUMN IF NOT EXISTS error_code TEXT;
 
 -- Confirmed Spotify→Tidal pairings.
 -- A spotify_id present here MUST NOT appear in unmatched (I-001).
