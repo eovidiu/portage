@@ -1,4 +1,4 @@
-import { neon } from "@neondatabase/serverless";
+import { neon, Pool, type PoolClient } from "@neondatabase/serverless";
 import type { Env } from "../env";
 import {
   insertRun,
@@ -41,15 +41,47 @@ function lockKey(): number {
 const LOCK_KEY = lockKey();
 const WALL_TIME_MS = 300_000;
 
-async function tryAcquireLock(env: Env): Promise<boolean> {
-  const sql = neon(env.DATABASE_URL);
-  const rows = await sql(`SELECT pg_try_advisory_lock($1) AS acquired`, [LOCK_KEY]);
-  return (rows[0] as { acquired: boolean }).acquired;
+// Postgres advisory locks are session-scoped. The Neon HTTP driver opens a
+// fresh session per query, so a lock acquired via `neon()` would auto-release
+// the moment the query returns — providing zero protection. The acquire and
+// release queries must share a single session, so we use Pool/WebSocket for
+// the lock pair only. Everything else in the orchestrator (insertRun, updateRun,
+// markAbandonedRuns, fetchNewTracks) stays on plain `neon()` since those
+// queries don't need session affinity.
+interface LockSession {
+  pool: Pool;
+  client: PoolClient;
 }
 
-async function releaseLock(env: Env): Promise<void> {
-  const sql = neon(env.DATABASE_URL);
-  await sql(`SELECT pg_advisory_unlock($1)`, [LOCK_KEY]);
+async function acquireLock(env: Env): Promise<LockSession | null> {
+  const pool = new Pool({ connectionString: env.DATABASE_URL });
+  const client = await pool.connect();
+  try {
+    const { rows } = await client.query(
+      `SELECT pg_try_advisory_lock($1) AS acquired`,
+      [LOCK_KEY],
+    );
+    const acquired = (rows[0] as { acquired: boolean }).acquired;
+    if (!acquired) {
+      client.release();
+      await pool.end();
+      return null;
+    }
+    return { pool, client };
+  } catch (err) {
+    client.release();
+    await pool.end();
+    throw err;
+  }
+}
+
+async function releaseLock(session: LockSession): Promise<void> {
+  try {
+    await session.client.query(`SELECT pg_advisory_unlock($1)`, [LOCK_KEY]);
+  } finally {
+    session.client.release();
+    await session.pool.end();
+  }
 }
 
 async function fetchNewTracks(
@@ -175,8 +207,8 @@ async function runSyncBody(
 export async function runSync(env: Env): Promise<OrchestratorResult> {
   await markAbandonedRuns(env);
 
-  const acquired = await tryAcquireLock(env);
-  if (!acquired) {
+  const session = await acquireLock(env);
+  if (!session) {
     console.log(
       JSON.stringify({ event: "sync_skipped_locked", lock_key: LOCK_KEY }),
     );
@@ -222,6 +254,6 @@ export async function runSync(env: Env): Promise<OrchestratorResult> {
 
     return raceResult as OrchestratorResult;
   } finally {
-    await releaseLock(env);
+    await releaseLock(session);
   }
 }
