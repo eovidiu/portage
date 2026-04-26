@@ -37,6 +37,7 @@ SQL_KEYWORDS = {
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCHEMA_PATH = PROJECT_ROOT / "db" / "schema.sql"
 SRC_DIR = PROJECT_ROOT / "src"
+SPECS_DIR = PROJECT_ROOT / "docs" / "specs"
 
 
 def schema_columns() -> set[str]:
@@ -133,6 +134,50 @@ def check_sql(sql: str, allowed: set[str], path: str) -> list[str]:
     return issues
 
 
+def schema_indices() -> set[str]:
+    """Return the set of index names declared in db/schema.sql."""
+    if not SCHEMA_PATH.exists():
+        return set()
+    text = SCHEMA_PATH.read_text()
+    names = set()
+    for m in re.finditer(r"CREATE INDEX (?:IF NOT EXISTS )?(\w+)\s+ON", text, re.IGNORECASE):
+        names.add(m.group(1).lower())
+    return names
+
+
+def specs_indices() -> dict[str, list[str]]:
+    """Return {index_name_lower: [spec_files_referencing_it]}."""
+    out: dict[str, list[str]] = {}
+    if not SPECS_DIR.exists():
+        return out
+    for path in SPECS_DIR.glob("F-*.md"):
+        try:
+            content = path.read_text()
+        except Exception:
+            continue
+        for m in re.finditer(r"CREATE INDEX (?:IF NOT EXISTS )?(\w+)\s+ON", content, re.IGNORECASE):
+            name = m.group(1).lower()
+            out.setdefault(name, []).append(path.name)
+    return out
+
+
+def check_index_drift() -> list[str]:
+    """Verify every CREATE INDEX named in any spec also exists in db/schema.sql.
+    Catches the Sprint 5 anti-pattern where idx_captures_spotify_id was in the
+    F-013 spec but not in db/schema.sql."""
+    in_schema = schema_indices()
+    spec_refs = specs_indices()
+    issues = []
+    for idx_name, spec_files in sorted(spec_refs.items()):
+        if idx_name not in in_schema:
+            files = ", ".join(sorted(set(spec_files)))
+            issues.append(
+                f"db/schema.sql: spec-declared index '{idx_name}' missing "
+                f"(referenced in {files})"
+            )
+    return issues
+
+
 def main() -> int:
     allowed = schema_columns()
     if not allowed:
@@ -147,6 +192,7 @@ def main() -> int:
         rel = path.relative_to(PROJECT_ROOT)
         for sql in extract_sql_strings(content):
             issues.extend(check_sql(sql, allowed, str(rel)))
+    issues.extend(check_index_drift())
     if issues:
         for i in sorted(set(issues)):
             print(i)

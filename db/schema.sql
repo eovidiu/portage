@@ -113,5 +113,7 @@ CREATE INDEX IF NOT EXISTS idx_tracks_isrc          ON tracks(isrc) WHERE isrc I
 CREATE INDEX IF NOT EXISTS idx_tracks_added_at      ON tracks(spotify_added_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sync_runs_started_at ON sync_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_matches_sync_run_id  ON matches(sync_run_id);
+CREATE INDEX IF NOT EXISTS idx_matches_tidal        ON matches(tidal_id);
 CREATE INDEX IF NOT EXISTS idx_unmatched_status     ON unmatched(status, attempts);
 CREATE INDEX IF NOT EXISTS idx_captures_captured_at ON captures(captured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_captures_spotify_id  ON captures(spotify_id);

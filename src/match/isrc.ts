@@ -7,6 +7,7 @@ import type { Env } from "../env";
 // TODO(ovidiu): Verify URL template against Tidal Open API v2 docs.
 // Tidal Open API v2 — search by ISRC
 // https://developer.tidal.com/reference/get_tracks-v2
+// TODO(ovidiu): Verify URL template + ISRC filter param against Tidal Open API v2 docs.
 const TIDAL_TRACKS_URL = "https://openapi.tidal.com/v2/tracks";
 
 const DURATION_TOLERANCE_MS = 2000;

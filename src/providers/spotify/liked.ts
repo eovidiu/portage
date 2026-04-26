@@ -18,6 +18,7 @@ import { buildUpsertQueries, upsertTracks, type TrackRow } from "../../db/tracks
 import { readCursor, buildCursorQuery } from "../../db/sync_state";
 import type { Env } from "../../env";
 
+// TODO(ovidiu): Verify Liked Songs endpoint + page size against Spotify Web API docs.
 const LIKED_SONGS_URL = "https://api.spotify.com/v1/me/tracks?limit=50";
 const CURSOR_KEY = "spotify_cursor";
 const CLOCK_SKEW_MS = 60_000;

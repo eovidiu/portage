@@ -148,8 +148,30 @@ if [ -x ".claude/hooks/check-schema-drift.py" ] && [ -f "db/schema.sql" ]; then
         echo ""
         echo "This is the third sprint where a column referenced in code was missing from db/schema.sql"
         echo "(Sprint 1 status, Sprint 3 idx_tracks_added_at, Sprint 4 tidal_id_invalid)."
-        echo "Add the column to db/schema.sql (with ADD COLUMN IF NOT EXISTS) and flag PENDING in your"
+        echo "Sprint 6 extension: also catches CREATE INDEX names declared in docs/specs/ that are"
+        echo "missing from db/schema.sql (Sprint 5 idx_captures_spotify_id pattern)."
+        echo "Add the column or index to db/schema.sql (with IF NOT EXISTS) and flag PENDING in your"
         echo "completion message — the lead applies the migration to live Neon via MCP."
+        increment_correction_cycles
+        exit 2
+    }
+fi
+
+# Stage 5: TODO(ovidiu) audit-marker check (D5 follow-up from sprint-4 review).
+# External-API URL constants (api.spotify.com, openapi.tidal.com) must have a
+# TODO(ovidiu) comment on the immediately preceding line so Ovidiu can audit
+# them against upstream API docs. Sprint 4 review found 3 of 4 such constants
+# missing markers; backfilled in Sprint 6 + this hook now enforces.
+if [ -x ".claude/hooks/check-todo-markers.py" ]; then
+    TODO_OUTPUT=$(python3 .claude/hooks/check-todo-markers.py 2>&1) || {
+        echo "Task rejected: TODO(ovidiu) marker discipline check failed."
+        echo ""
+        echo "$TODO_OUTPUT"
+        echo ""
+        echo "External-API URL constants (api.spotify.com, openapi.tidal.com) MUST have a"
+        echo "TODO(ovidiu) comment on the immediately preceding non-blank line. The marker"
+        echo "lets Ovidiu audit each URL against upstream API docs as part of pre-deploy review."
+        echo "Add a one-line comment above the constant: // TODO(ovidiu): Verify <X> against <docs>."
         increment_correction_cycles
         exit 2
     }
