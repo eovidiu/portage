@@ -296,7 +296,7 @@
       "assigned_to": null,
       "test_file": "tests/match/isrc.test.ts",
       "coverage": "src/match/isrc.ts: 98.8% stmts, 97.95% branches, 100% functions, 100% lines (istanbul; line 56 defensive guard unreachable from caller); src/match/artist.ts: 100%; src/db/matches.ts: 100%",
-      "notes": "Tried first per ADR-004 before any fuzzy logic. Split into isrc.ts + artist.ts per one-file-per-concern Meta-Pattern. 429 handled inline in isrc.ts (not extended into tidalFetch). Deferred: T-006-13 (curated set live API test), T-006-14 (corrupted ISRC live API test) — both require live Tidal API or recorded fixtures.",
+      "notes": "Tried first per ADR-004 before any fuzzy logic. Split into isrc.ts + artist.ts per one-file-per-concern Meta-Pattern. 429 handled inline in isrc.ts (not extended into tidalFetch). Deferred: T-006-13 (curated set live API test), T-006-14 (corrupted ISRC live API test) \u2014 both require live Tidal API or recorded fixtures.",
       "correction_cycles": 0,
       "scope_expansions": [],
       "approaches_tried": [
@@ -380,22 +380,24 @@
       "test_spec": "docs/specs/T-011-sync-logging.md",
       "description": "Sync run logging and metrics (sync_runs table + GET endpoints)",
       "priority": 7,
-      "status": "pending",
+      "status": "in-progress",
       "scope": [
         "src/db/sync_runs.ts",
         "src/routes/sync/status.ts",
         "src/routes/sync/runs.ts",
         "src/routes/stats.ts",
-        "tests/routes/sync/"
+        "src/index.ts",
+        "tests/routes/sync/",
+        "tests/db/sync_runs.test.ts"
       ],
       "depends_on": [
         "F001"
       ],
-      "assigned_to": null,
+      "assigned_to": "logging",
       "test_file": null,
       "coverage": null,
       "notes": "Co-implemented with F-009 (orchestrator owns the row writes). Read endpoints can ship before F-009 returns real data.",
-      "correction_cycles": 0,
+      "correction_cycles": 1,
       "scope_expansions": [],
       "approaches_tried": [],
       "failure_reason": null,
@@ -407,10 +409,11 @@
       "test_spec": "docs/specs/T-009-sync-orchestration.md",
       "description": "Sync orchestration (POST /sync/run + engine)",
       "priority": 8,
-      "status": "pending",
+      "status": "in-progress",
       "scope": [
         "src/sync/orchestrator.ts",
         "src/routes/sync/run.ts",
+        "src/index.ts",
         "tests/sync/orchestrator.test.ts"
       ],
       "depends_on": [
@@ -420,7 +423,7 @@
         "F008",
         "F011"
       ],
-      "assigned_to": null,
+      "assigned_to": "orchestrator",
       "test_file": null,
       "coverage": null,
       "notes": "Owns sync_runs row lifecycle. State machine: running -> succeeded|partial|failed. 600s abandonment rule.",

@@ -135,6 +135,26 @@ PYEOF
     fi
 fi
 
+# Stage 4: Schema-drift sanity check (D5 from sprint-4 review).
+# Catches the anti-pattern where code references a DB column that's
+# missing from db/schema.sql (and therefore likely missing from production
+# Neon). Hit Sprint 1 (status), Sprint 3 (idx_tracks_added_at), Sprint 4
+# (tidal_id_invalid). Same playbook as Stage 3.
+if [ -x ".claude/hooks/check-schema-drift.py" ] && [ -f "db/schema.sql" ]; then
+    DRIFT_OUTPUT=$(python3 .claude/hooks/check-schema-drift.py 2>&1) || {
+        echo "Task rejected: schema-drift sanity check failed."
+        echo ""
+        echo "$DRIFT_OUTPUT"
+        echo ""
+        echo "This is the third sprint where a column referenced in code was missing from db/schema.sql"
+        echo "(Sprint 1 status, Sprint 3 idx_tracks_added_at, Sprint 4 tidal_id_invalid)."
+        echo "Add the column to db/schema.sql (with ADD COLUMN IF NOT EXISTS) and flag PENDING in your"
+        echo "completion message — the lead applies the migration to live Neon via MCP."
+        increment_correction_cycles
+        exit 2
+    }
+fi
+
 # Remind about stale in-progress features
 if [ -f ".harness/features.json" ]; then
     IN_PROGRESS=$(python3 -c "
