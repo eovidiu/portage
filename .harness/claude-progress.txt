@@ -41,16 +41,42 @@
 - Stage 4 schema-drift hook landed and validated. Catches simulated Sprint-4 regression; clean on all current code.
 - Coordination: 1 genuine failure (Wave A orchestrator shipped broken lock despite plan revision — lead applied Pool/WebSocket fix in 7012a39). Wave B+C's captures appeared silent but their SendMessage was ~5 min delayed in delivery — they had correctly picked up the follow-up and shipped (9705b4b). Lead acted prematurely, did duplicate work, recovered cleanly via Write tool blocking. Sprint 6 carry-over revised: only the orchestrator pattern needs mechanical compliance fixes; the captures pattern just needs lead to wait 5 min and check git log before assuming non-response.
 
-## Next Session — Sprint 6 plan
-1. **Push to origin** (Ovidiu's call on timing). Currently 6 unpushed commits since the Wave A close-out push.
-2. **Project-level review pass**: with all 17 features passing, run a project-level reviewer (Opus) over the full src/ tree before declaring shippable. This is the equivalent of Sprint 4's review wave but at sprint-of-sprints scope. Look for: cross-feature consistency (HTTP error shapes, log line conventions, DB transaction patterns), security (PII in logs, token handling), spec coverage matrix completeness, anything that snuck through the per-feature reviews.
-3. **F-Q1 enrichment**: T-009-10 wall-time metric + T-011-13 p95-with-1000-rows are deferred e2e tests. Add them to the F-Q1 e2e harness (already wired up against wrangler dev) for full mechanical spec coverage.
-4. **F-Integ extension**: add F-005 + F-008 + F-009 paths to the integration test (already exists against Neon branch); closes Sprint 3 D5, Sprint 4 D3, Sprint 5 lock-driver gotcha.
-5. **Sprint 6 harness improvements**:
-   - Plan-approval compliance enforcement (file-flag PreToolUse hook, OR explicit ack convention "starting work: <plan summary>" required before edits, OR teammate must echo lead's revisions in their first commit message).
-   - Pre-commit lead-stub for shared mount points (src/index.ts) when 2+ teammates run in parallel — prevents the recurring bundled-commit issue. Same pattern as Sprint 2's stub for sync_runs.ts (commit 9cee614).
-   - Stage 5 TODO-marker hook (still pending from Sprint 4).
-   - Index-migration scrutiny in Stage 4 (Wave C surfaced this — captures' missing index in spec).
+## Session 7 - Sprint 6 (review + enrichment + harness, 2026-04-26)
+- 4 commits this session: a07f554 Stage 4/5 hooks + backfill, b9b4db3 F-Integ extension, f6ccc18 F-Q1 e2e enrichment, 51cd380 small fix-wave M6+m1+m2
+- All 5 stages of TaskCompleted hook now mechanical (Sprint 6 added Stage 4 index extension + Stage 5 TODO markers)
+- Tests: 462 unit + 18 integration (was 8) + 8 e2e (was 6) — all suites green
+- Project-level reviewer (Opus) verdict: SHIP-WITH-FOLLOW-UPS (0 critical, 8 major, 5 minor). Findings in .harness/reviews/sprint-5-final.md
+- Applied small fix-wave: M6 (status logic spec compliance, ~5 LOC), m1 (stats.ts inconsistent error shape, 1 LOC), m2 (duplicate TODOs, my own backfill artifact, 4 LOC)
+- Live Neon now in sync with db/schema.sql (idx_matches_tidal + idx_captures_spotify_id retroactively added to file)
+- Coordination: ZERO failures this sprint. Lessons from Sprints 5 retrospective compounded with mechanical hooks.
+
+## Next Session — Sprint 7 plan (5 deferred majors + 1 minor + 1 process item)
+
+Deferred from Sprint 6 reviewer's findings (sprint-5-final.md):
+
+1. **M1 — F-012-R3/R4 candidates fetch** (highest user-facing impact): currently `candidates: []` is hardcoded; iOS clients will see empty candidates on every unmatched row. Fix: implement `fetchCandidatesForUnmatched(env, rows, deadlineMs)` that calls F-007 search + scoreCandidate per row, returns top 5, with Promise.race-based 10s timeout. Wire into routes/unmatched.ts GET handler. Estimated: ~80 LOC + new tests. Single Sonnet teammate.
+
+2. **M2 + M3 — F-012-R10/R11 fuzzy filter**: combined SQL change to fetchUnmatchedTracks. Add LEFT JOIN unmatched + filter `(u.status IS NULL OR u.status NOT IN ('skipped','matched'))` AND `(u.spotify_id IS NULL OR u.last_attempt_at < now() - interval '7 days')`. ~10 LOC + tests. Combine with M1 in a single F-012 follow-up wave.
+
+3. **M4 — F-013-R9 orphan ISRC handling**: add UNION query to orchestrator's fetchNewTracks for tracks not in matches/unmatched. ~10 LOC + tests. Combine with M5/M6 in an orchestrator follow-up wave.
+
+4. **M5 — F-009 error attribution discrimination** (operator-runbook impact): catch SpotifyAuthError vs transient vs IntegrityError vs default; map to spectroscopically distinct error_code values. ~15 LOC, but requires updating existing T-009-05 (which throws raw Error and currently expects spotify_reauth_required). New tests for each error_code path.
+
+5. **M7 — HTTP route catches swallow errors** (NFR §5.4 violation, debuggability): introduce `logRouteError(stage, err)` helper, replace 11 `} catch {` sites with `} catch (err) { logRouteError(...); ...`. Mechanical refactor. ~30 LOC change + tests for the log emission.
+
+Additional Sprint 7 minor:
+- m5 — Hono `as never` cast in middleware/auth.ts; fix by typing Hono app with Variables: {subject: string}, ~3 LOC threading through src/index.ts
+
+Process item carried from Sprint 5 retrospective:
+- Plan-approval compliance enforcement: still un-mechanized. Reviewer found no recurrence in Sprint 6 (no plan_approval used) but the mechanism remains needed for future foundational features. Options: file-flag PreToolUse hook, explicit ack convention, first-commit-message echo. Defer until next foundational feature.
+- Pre-commit lead-stub for shared mount points: still un-mechanized. No recurrence in Sprint 6 (only one teammate touched src/index.ts at a time). Defer until next parallel wave with shared mount.
+
+Suggested Sprint 7 team structure:
+- Wave A: candidates-impl (Sonnet) for M1 + M2/M3 in F-012; orchestrator-fixup (Sonnet) for M4 + M5 + M6 (already done) in F-009 + orchestrator
+- Wave B: route-logging-refactor (Sonnet) for M7 + m5
+- No reviewer needed — Sprint 6's reviewer already covered the project; Sprint 7 reviews can be per-feature.
+
+## Outstanding/deferred (tracked, not done)
 
 ## Sprint 6 harness improvements (carry over from Sprint 5 retrospective)
 - **Plan approval compliance enforcement**: spawn prompts already require waiting for approval, but the F-009 teammate proceeded anyway. Options: (a) `.harness/teammate-<name>-approved.flag` file gate via PreToolUse hook on Write/Edit until the lead writes the flag, (b) clearer "if in doubt, ask" instruction in spawn template, (c) require the teammate to echo back the lead's revisions in their first commit message.

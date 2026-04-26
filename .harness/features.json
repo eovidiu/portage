@@ -202,11 +202,16 @@
       ],
       "test_file": "tests/integration/oauth-spotify.test.ts",
       "coverage": "n/a \u2014 integration tests run in Node (not Workers sandbox); coverage tooling not applicable. 8/8 tests pass: 4 Spotify + 4 Tidal.",
-      "notes": "Sprint 3 opener. Pattern: Neon Management API create_branch \u2192 waitForEndpoint warmup \u2192 apply db/schema.sql via @neondatabase/serverless \u2192 mock only outbound Spotify/Tidal fetch (pass Neon HTTP through) \u2192 real persistTokens/loadTokens round-trip \u2192 assert plaintext canary survives encrypt+UPSERT+SELECT+decrypt \u2192 delete_branch in afterAll. Key gotcha: vi.spyOn(globalThis, 'fetch') intercepts ALL fetch including @neondatabase/serverless HTTP queries \u2014 must use a selective mock that passes non-Spotify/Tidal URLs to realFetch. Branch lifecycle: one branch per test file (not per test) to amortize the 5-15s creation cost. Unit suite (npm test) unchanged at 172/172 via exclude in vitest.config.ts.",
+      "notes": "Sprint 6 extension: F-005 + F-008 + F-009 paths added. F-005 (3 tests): field mapping incl nullable album/duration_ms, cursor atomicity (I-005), idempotent re-run. F-008 (3 tests): dedupe of already-present Tidal IDs, batch append, watermark advance, zero-write second run. F-009 (4 tests): advisory lock acquires via Pool/WebSocket against real Postgres (closes Sprint 5 lock-driver gotcha), sync_runs row lifecycle, concurrent invocation (Promise.all([runSync, runSync]) yields exactly one succeeded + one skipped_locked with no duplicate sync_runs row), lock release. 18/18 integration tests passing (was 8). Runtime ~21s. Discovery: tidalFetch passes Request object (not init options) to fetch \u2014 mock must read input.method when input instanceof Request.",
       "correction_cycles": 0,
-      "scope_expansions": [],
+      "scope_expansions": [
+        "tests/integration/spotify-liked.test.ts (new, F-005 path)",
+        "tests/integration/tidal-playlist.test.ts (new, F-008 path)",
+        "tests/integration/orchestrator.test.ts (new, F-009 path with concurrent-invocation lock test)"
+      ],
       "approaches_tried": [
-        "vi.spyOn(globalThis.fetch).mockResolvedValueOnce \u2014 intercepted Neon HTTP queries, crashed processQueryResult; switched to selective URL-discriminating mock that passes non-provider URLs to realFetch"
+        "vi.spyOn(globalThis.fetch).mockResolvedValueOnce \u2014 intercepted Neon HTTP queries, crashed processQueryResult; switched to selective URL-discriminating mock that passes non-provider URLs to realFetch",
+        "Sprint 6: URL-discriminating fetch mock pattern reused from oauth-spotify.test.ts; one Neon branch per test file (afterAll deletes); F-009 concurrent test uses Promise.all to truly race two runSync invocations against real Postgres advisory lock"
       ],
       "failure_reason": null,
       "discovered_via": "F004b"
@@ -232,11 +237,16 @@
       ],
       "test_file": "tests/e2e/auth-latency.test.ts",
       "coverage": "n/a \u2014 e2e tests exercise real wrangler dev process; no instrumentation",
-      "notes": "Sprint 3. Spawns wrangler dev (port 8787) in child_process, polls /healthz for readiness, runs vitest with vitest.e2e.config.ts (Node pool, not Workers pool). JWT_SECRET read from .dev.vars with quote-stripping (wrangler strips quotes; Node file parse must match). All 6 deferred tests now mechanical: T-001-10, T-014-03, T-014-11, T-002-02, T-002-03, T-003-02. Measured on Apple M-series Mac: T-014-03 p95=1.15ms, T-014-11 max=163ms, T-001-10 p95=1.19ms, T-002-02/T-003-02 min_bits=256/384. Thresholds may fail on slow/shared CI hardware. `npm run test:e2e` entry point.",
+      "notes": "Sprint 6 enrichment: T-009-10 (wall-time real timing) + T-011-13 (GET /sync/runs p95 with 1000 sync_runs rows) added. T-009-10 uses WALL_TIME_OVERRIDE_MS env hook (1ms in .dev.vars test) \u2014 asserts on POST /sync/run in-memory outcome (not GET /sync/status DB row) because runSyncBody continues after the race resolves. T-011-13 measured p95=64ms with 1000 rows (threshold 200ms). 8/8 e2e tests passing (was 6). T-001-10 has a pre-existing 60s timeout noted by e2e-enricher \u2014 not regression, separate Sprint 7 follow-up. Wrangler dev + Node pool harness pattern stable.",
       "correction_cycles": 0,
-      "scope_expansions": [],
+      "scope_expansions": [
+        "src/env.ts (added optional WALL_TIME_OVERRIDE_MS field)",
+        "src/sync/orchestrator.ts (read env.WALL_TIME_OVERRIDE_MS for cap; production default 300_000ms unchanged)",
+        ".dev.vars + .dev.vars.example (WALL_TIME_OVERRIDE_MS placeholder)"
+      ],
       "approaches_tried": [
-        "child_process.spawn + waitForPort polling /healthz; SIGTERM+SIGKILL fallback; JWT minted from .dev.vars JWT_SECRET with quote-strip fix"
+        "child_process.spawn + waitForPort polling /healthz; SIGTERM+SIGKILL fallback; JWT minted from .dev.vars JWT_SECRET with quote-strip fix",
+        "Sprint 6: WALL_TIME_OVERRIDE_MS env hook (1ms test value, undefined in production); 1000-row deterministic seed via LCG (seed=42), idempotent (skip if count>=1000), batched 100-row inserts via neon()"
       ],
       "failure_reason": null,
       "discovered_via": "F014"
@@ -431,7 +441,7 @@
       "assigned_to": null,
       "test_file": "tests/sync/orchestrator.test.ts",
       "coverage": "src/sync/orchestrator.ts: 100/100/100/100 (istanbul, after lead's lock fix); src/routes/sync/run.ts: 100/100/100/100. Gate met.",
-      "notes": "Owns sync_runs row lifecycle. State machine: running -> succeeded|partial|failed. 600s abandonment rule. Lock uses pg_try_advisory_lock with djb2-hashed key. error_code column added to sync_runs (live migration applied via Neon MCP). T-009-10 wall-clock metric deferred to e2e/F-Q1.",
+      "notes": "Owns sync_runs row lifecycle. State machine: running -> succeeded|partial|failed. 600s abandonment rule. Lock uses pg_try_advisory_lock with djb2-hashed key. error_code column added to sync_runs (live migration applied via Neon MCP). T-009-10 wall-clock metric deferred to e2e/F-Q1. | Sprint 6 review (sprint-5-final.md): error attribution hardcoded to spotify_reauth_required (M5) \u2014 needs discrimination (transient/decrypt_failed/fetch_failed); status='partial' on errors-with-zero-progress was wrong (M6) \u2014 FIXED in commit 51cd380 (now 'failed' per spec). M5 filed for Sprint 7.",
       "correction_cycles": 1,
       "scope_expansions": [
         "src/db/sync_runs.ts (added error_code field to SyncRunRow + SyncRunUpdate types)",
@@ -494,7 +504,7 @@
       "assigned_to": null,
       "test_file": "tests/routes/unmatched.test.ts",
       "coverage": "src/routes/unmatched.ts: 100% stmts/branches/funcs/lines (istanbul). DB layer (src/db/unmatched.ts) extended with listPending/markMatched/markSkipped \u2014 100% coverage from existing tests/db/unmatched.test.ts plus route tests.",
-      "notes": "GET /unmatched paginated (limit cap 100, default 20), joined with tracks for display metadata. POST /unmatched/:spotify_id/match verifies tidal_id via tidalFetch BEFORE the atomic transaction (defensive \u2014 surfaces invalid manual matches before DB write). markMatched is a single sql.transaction that INSERTs matches with method=manual and UPDATEs unmatched.status=matched (I-001 atomicity). POST /unmatched/:spotify_id/skip is idempotent (only updates rows still pending \u2014 F-012-R9).",
+      "notes": "GET /unmatched paginated (limit cap 100, default 20), joined with tracks for display metadata. POST /unmatched/:spotify_id/match verifies tidal_id via tidalFetch BEFORE the atomic transaction (defensive \u2014 surfaces invalid manual matches before DB write). markMatched is a single sql.transaction that INSERTs matches with method=manual and UPDATEs unmatched.status=matched (I-001 atomicity). POST /unmatched/:spotify_id/skip is idempotent (only updates rows still pending \u2014 F-012-R9). | Sprint 6 review (sprint-5-final.md): R3/R4 candidates field returns [] (M1 \u2014 iOS clients see empty candidates; needs real candidate fetch via F-007 search reuse with 10s timeout); R10/R11 silently violated by F-007 path (M2/M3 \u2014 fuzzy re-evaluates skipped + within-7-day-pending rows). Filed for Sprint 7.",
       "correction_cycles": 0,
       "scope_expansions": [],
       "approaches_tried": [
@@ -522,7 +532,7 @@
       "assigned_to": null,
       "test_file": "tests/routes/captures.test.ts",
       "coverage": "src/routes/captures.ts: 100/100/100/100; src/db/captures.ts: 100/100/100/100 (istanbul, after lead-added DB layer tests + 1 route branch test for line 116 non-Error throw path).",
-      "notes": "GET /captures with LEFT JOIN to matches/unmatched for match_status (matched/unmatched/pending) + tidal_id. POST /captures: idempotency window (60s, returns 200 with same capture_id on duplicate), unknown spotify_id auto-fetched from Spotify and persisted via upsertTracks before insert. FK violation handled (HTTP 400 track_not_found). Spotify 401 \u2192 503 spotify_reauth_required, 404 \u2192 400 spotify_track_not_found. Source enum: siri/share_sheet/shortcut/manual. context_note <=500 chars. captured_at defaults to now() if omitted. iOS-ready response shapes.",
+      "notes": "GET /captures with LEFT JOIN to matches/unmatched for match_status (matched/unmatched/pending) + tidal_id. POST /captures: idempotency window (60s, returns 200 with same capture_id on duplicate), unknown spotify_id auto-fetched from Spotify and persisted via upsertTracks before insert. FK violation handled (HTTP 400 track_not_found). Spotify 401 \u2192 503 spotify_reauth_required, 404 \u2192 400 spotify_track_not_found. Source enum: siri/share_sheet/shortcut/manual. context_note <=500 chars. captured_at defaults to now() if omitted. iOS-ready response shapes. | Sprint 6 review (sprint-5-final.md): R9 orphan-track ISRC handling partial (M4) \u2014 orphans bypass ISRC stage, picked up only by fuzzy. Fix is a UNION in fetchNewTracks. Filed for Sprint 7.",
       "correction_cycles": 0,
       "scope_expansions": [
         "tests/db/captures.test.ts (lead-requested follow-up after route tests mocked DB layer to 0%; teammate landed in commit 9705b4b)",
