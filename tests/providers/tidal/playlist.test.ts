@@ -74,6 +74,8 @@ describe("createPlaylist", () => {
     const body = JSON.parse(call[2].body as string);
     expect(body.data.attributes.title).toBe("Spotify Liked");
     expect(body.data.attributes.privacy).toBe("private");
+    expect(body.data.attributes.description).toContain("spotify-roon-sync");
+    expect(body.data.attributes.description).toContain("Do not edit manually");
   });
 
   it("throws if create returns non-2xx", async () => {
@@ -208,6 +210,22 @@ describe("addTracksToPlaylist — 429 handling (F-008-R8)", () => {
     const result = await addTracksToPlaylist(makeEnv(), "PL1", manyIds);
     expect(result.aborted ?? result.errors).toBeGreaterThan(0);
     expect(result.added).toBe(0);
+  });
+
+  it("partial last batch: 429 abort does not underflow error count (m8)", async () => {
+    // 105 ids: batch 1 (100) succeeds, batch 2 (5) gets 429 then second 429 → abort
+    // Without Math.max(0, ...), errors would be: 5 (batch errors) + (105-100-100) = 5 + (-95) = -90
+    const retryHeaders = { "Retry-After": "0" };
+    const ids = Array.from({ length: 105 }, (_, i) => `T${i}`);
+    mockTidalFetch
+      .mockResolvedValueOnce(ok({}))   // batch 1 (100 items) → success
+      .mockResolvedValueOnce(new Response("{}", { status: 429, headers: retryHeaders })) // batch 2 first try
+      .mockResolvedValueOnce(new Response("{}", { status: 429, headers: retryHeaders })); // batch 2 retry → abort
+
+    const result = await addTracksToPlaylist(makeEnv(), "PL1", ids);
+    expect(result.added).toBe(100);
+    expect(result.errors).toBe(5); // the 5-item last batch, NOT negative
+    expect(result.errors).toBeGreaterThanOrEqual(0);
   });
 });
 

@@ -364,11 +364,12 @@
       "assigned_to": null,
       "test_file": "tests/sync/playlist-writer.test.ts",
       "coverage": "src/providers/tidal/playlist.ts: 100% stmts, 98.41% branches, 100% funcs, 100% lines; src/providers/tidal/playlist-endpoints.ts: 100%; src/sync/playlist-writer.ts: 100% stmts, 100% branches, 100% funcs, 100% lines; src/db/matches.ts: 100%; src/db/sync_state.ts: 100%; src/db/unmatched.ts: 100% (istanbul)",
-      "notes": "Writes to a single named playlist per ADR-006, not Tidal favourites. 429 handled inline per Meta-Pattern M1. BATCH_SIZE=100 sourced from Tidal API docs. requeueForInvalidTidalId unconditional upsert (bypasses status='pending' guard in upsertUnmatched). readState/writeState generic helpers added to sync_state.ts alongside cursor-specific functions. PENDING: ALTER TABLE matches ADD COLUMN tidal_id_invalid BOOLEAN NOT NULL DEFAULT false must be applied to production Neon by Ovidiu before first run.",
+      "notes": "Writes to a single named playlist per ADR-006, not Tidal favourites. 429 handled inline per Meta-Pattern M1. BATCH_SIZE=100 sourced from Tidal API docs. requeueForInvalidTidalId unconditional upsert (bypasses status='pending' guard in upsertUnmatched). readState/writeState generic helpers added to sync_state.ts alongside cursor-specific functions. Schema migration applied to live Neon by lead via Neon MCP on 2026-04-26; db/schema.sql patched in fix wave.",
       "correction_cycles": 0,
       "scope_expansions": [],
       "approaches_tried": [
-        "playlist-endpoints.ts for URL constants + BATCH_SIZE; playlist.ts for API surface (createPlaylist/getPlaylist/getPlaylistTracks/getAllPlaylistTrackIds/addTracksToPlaylist); playlist-writer.ts for orchestration (ensurePlaylist + dedupe + batch-append + invalid-requeue + watermark advance)"
+        "playlist-endpoints.ts for URL constants + BATCH_SIZE; playlist.ts for API surface (createPlaylist/getPlaylist/getPlaylistTracks/getAllPlaylistTrackIds/addTracksToPlaylist); playlist-writer.ts for orchestration (ensurePlaylist + dedupe + batch-append + invalid-requeue + watermark advance)",
+        "Sprint-4 fix wave: added tidal_id_invalid to schema.sql; added TODO(ovidiu) markers per M1; lifted 'private' to PLAYLIST_PRIVACY constant; fixed error-count underflow in addTracksToPlaylist; added description-assertion test"
       ],
       "failure_reason": null,
       "discovered_via": null
