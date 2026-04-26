@@ -39,7 +39,7 @@ function lockKey(): number {
 }
 
 const LOCK_KEY = lockKey();
-const WALL_TIME_MS = 300_000;
+const DEFAULT_WALL_TIME_MS = 300_000;
 
 // Postgres advisory locks are session-scoped. The Neon HTTP driver opens a
 // fresh session per query, so a lock acquired via `neon()` would auto-release
@@ -205,6 +205,11 @@ async function runSyncBody(
 }
 
 export async function runSync(env: Env): Promise<OrchestratorResult> {
+  const wallTimeMs =
+    env.WALL_TIME_OVERRIDE_MS !== undefined
+      ? Number(env.WALL_TIME_OVERRIDE_MS)
+      : DEFAULT_WALL_TIME_MS;
+
   await markAbandonedRuns(env);
 
   const session = await acquireLock(env);
@@ -225,7 +230,7 @@ export async function runSync(env: Env): Promise<OrchestratorResult> {
     let timedOut = false;
     const bodyPromise = runSyncBody(env, runId, startedAt);
     const timeoutPromise = new Promise<"timeout">((resolve) =>
-      setTimeout(() => resolve("timeout"), WALL_TIME_MS),
+      setTimeout(() => resolve("timeout"), wallTimeMs),
     );
 
     const raceResult = await Promise.race([bodyPromise, timeoutPromise]);

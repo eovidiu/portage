@@ -10,4 +10,6 @@ export interface Env {
   TIDAL_REDIRECT_URI: string;
   TIDAL_COUNTRY_CODE: string;
   TIDAL_PLAYLIST_TITLE: string;
+  /** Test-only: overrides the 300 s wall-time cap. Absent in production. */
+  WALL_TIME_OVERRIDE_MS?: string;
 }
