@@ -2,7 +2,7 @@
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
   "total_features": 17,
-  "passing": 10,
+  "passing": 11,
   "features": [
     {
       "id": "F014",
@@ -345,10 +345,16 @@
       "test_spec": "docs/specs/T-008-tidal-playlist-write.md",
       "description": "Tidal playlist write (idempotent batch append)",
       "priority": 6,
-      "status": "pending",
+      "status": "passing",
       "scope": [
+        "src/providers/tidal/playlist-endpoints.ts",
         "src/providers/tidal/playlist.ts",
-        "tests/providers/tidal/playlist.test.ts"
+        "src/sync/playlist-writer.ts",
+        "src/db/matches.ts",
+        "src/db/sync_state.ts",
+        "src/db/unmatched.ts",
+        "tests/providers/tidal/playlist.test.ts",
+        "tests/sync/playlist-writer.test.ts"
       ],
       "depends_on": [
         "F003",
@@ -356,12 +362,14 @@
         "F007"
       ],
       "assigned_to": null,
-      "test_file": null,
-      "coverage": null,
-      "notes": "Writes to a single named playlist per ADR-006, not Tidal favourites.",
+      "test_file": "tests/sync/playlist-writer.test.ts",
+      "coverage": "src/providers/tidal/playlist.ts: 100% stmts, 98.41% branches, 100% funcs, 100% lines; src/providers/tidal/playlist-endpoints.ts: 100%; src/sync/playlist-writer.ts: 100% stmts, 100% branches, 100% funcs, 100% lines; src/db/matches.ts: 100%; src/db/sync_state.ts: 100%; src/db/unmatched.ts: 100% (istanbul)",
+      "notes": "Writes to a single named playlist per ADR-006, not Tidal favourites. 429 handled inline per Meta-Pattern M1. BATCH_SIZE=100 sourced from Tidal API docs. requeueForInvalidTidalId unconditional upsert (bypasses status='pending' guard in upsertUnmatched). readState/writeState generic helpers added to sync_state.ts alongside cursor-specific functions. PENDING: ALTER TABLE matches ADD COLUMN tidal_id_invalid BOOLEAN NOT NULL DEFAULT false must be applied to production Neon by Ovidiu before first run.",
       "correction_cycles": 0,
       "scope_expansions": [],
-      "approaches_tried": [],
+      "approaches_tried": [
+        "playlist-endpoints.ts for URL constants + BATCH_SIZE; playlist.ts for API surface (createPlaylist/getPlaylist/getPlaylistTracks/getAllPlaylistTrackIds/addTracksToPlaylist); playlist-writer.ts for orchestration (ensurePlaylist + dedupe + batch-append + invalid-requeue + watermark advance)"
+      ],
       "failure_reason": null,
       "discovered_via": null
     },
