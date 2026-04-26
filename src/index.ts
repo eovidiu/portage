@@ -9,6 +9,8 @@ import syncStatusRoute from "./routes/sync/status";
 import syncRunsRoute from "./routes/sync/runs";
 import syncRunRoute from "./routes/sync/run";
 import statsRoute from "./routes/stats";
+import capturesRoute from "./routes/captures";
+import { scheduled } from "./scheduled";
 
 const AUTH_SKIP_PATHS = ["/healthz", "/readyz", "/auth/spotify/callback", "/auth/tidal/callback"];
 
@@ -25,10 +27,9 @@ app.route("/sync", syncStatusRoute);
 app.route("/sync", syncRunsRoute);
 app.route("/sync", syncRunRoute);
 app.route("/", statsRoute);
+app.route("/", capturesRoute);
 
 export default {
   fetch: app.fetch,
-  async scheduled(_event: ScheduledEvent, _env: Env, _ctx: ExecutionContext): Promise<void> {
-    // sync handler — implemented by F010
-  },
+  scheduled,
 };
