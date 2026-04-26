@@ -39,7 +39,7 @@
 - Wave C: F-012 (unmatched queue) shipped clean in 9630a30 — 21 tests, 100% route coverage, defensive Tidal verify before manual-match transaction. F-013 (captures) shipped base in e57c5cf; lead requested DB layer test follow-up (route mocked DB to 0%) and route branch coverage; teammate landed DB tests in 9705b4b; lead added one extra branch test in d8a90b1.
 - Live Neon migrations applied via MCP: `error_code TEXT` column on `sync_runs`; `idx_captures_spotify_id` on `captures`.
 - Stage 4 schema-drift hook landed and validated. Catches simulated Sprint-4 regression; clean on all current code.
-- Coordination failures: 2 of the same shape (lead sends instructions, teammate doesn't surface what they did via SendMessage). Wave A's was active non-compliance (orchestrator shipped broken lock); Wave B+C's was silent compliance (captures did the work but didn't ack). Both noted as Sprint 6 carry-overs.
+- Coordination: 1 genuine failure (Wave A orchestrator shipped broken lock despite plan revision — lead applied Pool/WebSocket fix in 7012a39). Wave B+C's captures appeared silent but their SendMessage was ~5 min delayed in delivery — they had correctly picked up the follow-up and shipped (9705b4b). Lead acted prematurely, did duplicate work, recovered cleanly via Write tool blocking. Sprint 6 carry-over revised: only the orchestrator pattern needs mechanical compliance fixes; the captures pattern just needs lead to wait 5 min and check git log before assuming non-response.
 
 ## Next Session — Sprint 6 plan
 1. **Push to origin** (Ovidiu's call on timing). Currently 6 unpushed commits since the Wave A close-out push.
