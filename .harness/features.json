@@ -2,7 +2,7 @@
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
   "total_features": 17,
-  "passing": 8,
+  "passing": 9,
   "features": [
     {
       "id": "F014",
@@ -280,23 +280,28 @@
       "test_spec": "docs/specs/T-006-isrc-matching.md",
       "description": "ISRC-based exact track matching (Spotify -> Tidal)",
       "priority": 5,
-      "status": "pending",
+      "status": "passing",
       "scope": [
         "src/match/isrc.ts",
+        "src/match/artist.ts",
         "src/db/matches.ts",
-        "tests/match/isrc.test.ts"
+        "tests/match/isrc.test.ts",
+        "tests/match/artist.test.ts",
+        "tests/db/matches.test.ts"
       ],
       "depends_on": [
         "F003",
         "F005"
       ],
       "assigned_to": null,
-      "test_file": null,
-      "coverage": null,
-      "notes": "Tried first per ADR-004 before any fuzzy logic.",
+      "test_file": "tests/match/isrc.test.ts",
+      "coverage": "src/match/isrc.ts: 98.8% stmts, 97.95% branches, 100% functions, 100% lines (istanbul; line 56 defensive guard unreachable from caller); src/match/artist.ts: 100%; src/db/matches.ts: 100%",
+      "notes": "Tried first per ADR-004 before any fuzzy logic. Split into isrc.ts + artist.ts per one-file-per-concern Meta-Pattern. 429 handled inline in isrc.ts (not extended into tidalFetch). Deferred: T-006-13 (curated set live API test), T-006-14 (corrupted ISRC live API test) — both require live Tidal API or recorded fixtures.",
       "correction_cycles": 0,
       "scope_expansions": [],
-      "approaches_tried": [],
+      "approaches_tried": [
+        "Hand-rolled Levenshtein DP for tokenSortRatio (no npm dep); 429 sleep+retry inline in isrc.ts per Meta-Pattern M1 (don't extend tidalFetch)"
+      ],
       "failure_reason": null,
       "discovered_via": null
     },
