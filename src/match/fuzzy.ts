@@ -6,7 +6,6 @@ import { normaliseTitle } from "./title";
 import { scoreCandidate, tidalDurationMs, type TidalCandidateInput } from "./score";
 import type { Env } from "../env";
 
-// TODO(ovidiu): Verify this endpoint against current Tidal Open API v2 docs.
 // Documented form as of 2026-04-26: GET /v2/searchresults/{query}/relationships/tracks
 // with ?countryCode=<CC>&include=tracks&limit=5
 // TODO(ovidiu): Verify search URL + query construction against Tidal Open API v2 docs.

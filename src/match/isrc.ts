@@ -4,7 +4,6 @@ import { insertMatch } from "../db/matches";
 import { artistAgrees } from "./artist";
 import type { Env } from "../env";
 
-// TODO(ovidiu): Verify URL template against Tidal Open API v2 docs.
 // Tidal Open API v2 — search by ISRC
 // https://developer.tidal.com/reference/get_tracks-v2
 // TODO(ovidiu): Verify URL template + ISRC filter param against Tidal Open API v2 docs.
