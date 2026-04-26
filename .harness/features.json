@@ -2,7 +2,7 @@
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
   "total_features": 17,
-  "passing": 11,
+  "passing": 14,
   "features": [
     {
       "id": "F014",
@@ -380,7 +380,7 @@
       "test_spec": "docs/specs/T-011-sync-logging.md",
       "description": "Sync run logging and metrics (sync_runs table + GET endpoints)",
       "priority": 7,
-      "status": "in-progress",
+      "status": "passing",
       "scope": [
         "src/db/sync_runs.ts",
         "src/routes/sync/status.ts",
@@ -393,13 +393,15 @@
       "depends_on": [
         "F001"
       ],
-      "assigned_to": "logging",
-      "test_file": null,
-      "coverage": null,
-      "notes": "Co-implemented with F-009 (orchestrator owns the row writes). Read endpoints can ship before F-009 returns real data.",
-      "correction_cycles": 1,
+      "assigned_to": null,
+      "test_file": "tests/db/sync_runs.test.ts",
+      "coverage": "src/db/sync_runs.ts: 98.48% stmts, 95.45% branches, 100% funcs, 100% lines (istanbul; 1 branch unreachable: toSig4 n===0 guard never reached because callers check total>0 first); src/routes/sync/status.ts: 100/100/100/100; src/routes/sync/runs.ts: 100/100/100/100; src/routes/stats.ts: 100/100/100/100. Gate met.",
+      "notes": "Replaced stub bodies in src/db/sync_runs.ts with real Neon SQL. Aggregate stats use single SQL query (R9). match_rate via toPrecision(4) for 4 sig digits (R7). lag_hours = Math.round(ms/360000)/10 for 1-decimal precision (R10). T-011-13 (p95 <200ms with 1000 rows) deferred to F-Q1 e2e \u2014 no wrangler dev in unit context. F-009 added error_code field to SyncRunRow/SyncRunUpdate types (interface extension, not body change) to support 4 terminal-failure error codes per spec failure-mode table.",
+      "correction_cycles": 0,
       "scope_expansions": [],
-      "approaches_tried": [],
+      "approaches_tried": [
+        "neon(DATABASE_URL)(sql, params) pattern throughout DB layer; thin Hono handlers delegating to DB helpers; aggregate stats as single SQL with FILTER WHERE clauses for runs_succeeded/partial/failed counts in one query"
+      ],
       "failure_reason": null,
       "discovered_via": null
     },
@@ -409,12 +411,15 @@
       "test_spec": "docs/specs/T-009-sync-orchestration.md",
       "description": "Sync orchestration (POST /sync/run + engine)",
       "priority": 8,
-      "status": "in-progress",
+      "status": "passing",
       "scope": [
         "src/sync/orchestrator.ts",
         "src/routes/sync/run.ts",
         "src/index.ts",
-        "tests/sync/orchestrator.test.ts"
+        "src/db/sync_runs.ts",
+        "db/schema.sql",
+        "tests/sync/orchestrator.test.ts",
+        "tests/routes/sync/run.test.ts"
       ],
       "depends_on": [
         "F005",
@@ -423,13 +428,19 @@
         "F008",
         "F011"
       ],
-      "assigned_to": "orchestrator",
-      "test_file": null,
-      "coverage": null,
-      "notes": "Owns sync_runs row lifecycle. State machine: running -> succeeded|partial|failed. 600s abandonment rule.",
-      "correction_cycles": 0,
-      "scope_expansions": [],
-      "approaches_tried": [],
+      "assigned_to": null,
+      "test_file": "tests/sync/orchestrator.test.ts",
+      "coverage": "src/sync/orchestrator.ts: 100/100/100/100 (istanbul, after lead's lock fix); src/routes/sync/run.ts: 100/100/100/100. Gate met.",
+      "notes": "Owns sync_runs row lifecycle. State machine: running -> succeeded|partial|failed. 600s abandonment rule. Lock uses pg_try_advisory_lock with djb2-hashed key. error_code column added to sync_runs (live migration applied via Neon MCP). T-009-10 wall-clock metric deferred to e2e/F-Q1.",
+      "correction_cycles": 1,
+      "scope_expansions": [
+        "src/db/sync_runs.ts (added error_code field to SyncRunRow + SyncRunUpdate types)",
+        "db/schema.sql (added error_code TEXT column on sync_runs)"
+      ],
+      "approaches_tried": [
+        "Initial: bare neon() HTTP for both pg_try_advisory_lock and pg_advisory_unlock \u2014 broken (HTTP driver opens fresh session per query, lock auto-releases, zero protection). Lead caught in plan_approval response but teammate proceeded anyway.",
+        "Fix (lead): Pool/WebSocket from @neondatabase/serverless sharing a single PoolClient across the lock pair; pool.end() in finally. Everything else stays on neon() HTTP. Added defensive cleanup branch + test (T-009-07b)."
+      ],
       "failure_reason": null,
       "discovered_via": null
     },

@@ -31,24 +31,32 @@
 - ZERO correction cycles across F-006/F-007/F-008 implementation — Sprint 3 hook investment paying compounding dividends
 - Live Neon DDL applied via MCP this session: `idx_matches_tidal` (F-006), `tidal_id_invalid BOOLEAN` (F-008)
 
-## Next Session — Sprint 5 plan
-1. **F-011 (sync logging)** FIRST — single teammate, depends only on F-001 (auth middleware). ~2-3 hours. Read endpoints (GET /sync/status, /sync/runs, /stats) + sync_runs row CRUD. Wave A.
-2. **F-009 (sync orchestration)** — depends on F-005, F-006, F-007, F-008, F-011. Use the lead-stub interface pattern from Sprint 2: pre-commit a stub for the F-009 orchestrator interface so F-011 can be tested against it; F-009 fills in the body. Wave A in parallel with F-011.
-3. **F-010 (cron)** — single small teammate after F-009 lands. Wraps the Cloudflare Workers cron trigger; calls F-009 orchestrator. Trivial. Wave B.
-4. **F-012 (unmatched queue)** + **F-013 (captures API)** — both depend on F-001 + F-009. Can run in parallel after F-009 lands. Wave C.
-5. **Pre-Sprint-5**: push the 6 Sprint 4 commits to origin (Ovidiu's call on timing).
+## Session 6 - Sprint 5 Wave A: F-011 + F-009 (2026-04-26)
+- Team portage-sprint-5: 3 commits this session (34f28c0 Stage 4 hook, 3732cce feat F-011 [bundled F-009 work too], 7012a39 fix F-009 lock); 381/381 tests; tsc clean
+- F-011 (logging) shipped clean, 0 correction cycles. Coverage 100% on routes; 98.48% on sync_runs.ts (one logically-unreachable branch in toSig4).
+- F-009 (orchestrator) had a coordination failure: teammate received plan_approval revision (advisory lock must use Pool/WebSocket) but proceeded with the broken bare-neon() approach anyway. Lead applied the fix directly (~30 LOC src + ~30 LOC test); F-009 coverage now 100% across the board. correction_cycles=1 reflects the lead-applied fix.
+- Live Neon migration applied via MCP: `error_code TEXT` column on `sync_runs`.
+- Stage 4 schema-drift hook landed and validated. Catches simulated Sprint-4 regression; clean on current code. Pending: Stage 5 TODO-marker hook (push to Sprint 6).
 
-## Sprint 5 harness improvements (carry over from Sprint 4 review D5)
-- Add Stage 4 to TaskCompleted hook: grep src/ for new column references not in db/schema.sql, reject completion. Same playbook as Sprint 3's coverage-claim gate. ~30 LOC bash. Mechanical enforcement of the schema-migration discipline anti-pattern.
-- Add Stage 5 (optional): grep src/ for new `openapi.tidal.com` / `api.spotify.com` URL constants requiring an immediately-preceding `TODO(ovidiu)` marker. Mechanically enforces the audit-marker discipline.
+## Next Session — Sprint 5 Wave B + Wave C
+1. **F-010 (cron)** — Wave B. Single small teammate. Wraps Cloudflare Workers cron trigger; calls F-009 orchestrator's `runSync(env)`. Trivial scope (src/scheduled.ts + wrangler.toml cron section). Should ship clean given the orchestrator interface is now stable.
+2. **F-012 (unmatched queue)** + **F-013 (captures API)** — Wave C, both depend on F-001 + F-009. Can run in parallel after F-010 (or alongside it, since they don't share scope). Both are HTTP CRUD endpoints over existing tables.
+3. **Pre-Sprint-6**: push the unpushed commits to origin (Ovidiu's call on timing).
+
+## Sprint 6 harness improvements (carry over from Sprint 5 retrospective)
+- **Plan approval compliance enforcement**: spawn prompts already require waiting for approval, but the F-009 teammate proceeded anyway. Options: (a) `.harness/teammate-<name>-approved.flag` file gate via PreToolUse hook on Write/Edit until the lead writes the flag, (b) clearer "if in doubt, ask" instruction in spawn template, (c) require the teammate to echo back the lead's revisions in their first commit message.
+- **Per-feature commit hygiene**: F-011 teammate bundled F-009 files in their `feat(F-011)` commit. Spawn prompt should say "commit ONLY files in your scope" explicitly. Or pre-commit hook warns on cross-scope staging.
+- **Stage 5 TODO marker hook** still pending — push to Sprint 6 alongside the above.
 
 ## Outstanding/deferred (tracked, not done)
-- T-006-13 + T-006-14 (curated 20-track + corrupted ISRC tests, live Tidal API) — F-Q2 candidate (Sprint 5+)
+- T-006-13 + T-006-14 (curated 20-track + corrupted ISRC tests, live Tidal API) — F-Q2 candidate (Sprint 6+)
 - T-007-15 (curated 20-track precision, live Tidal) — F-Q2 candidate
-- F-Integ extension for F-005 + F-008 paths — Sprint 5+ (closes Sprint 3 D5 + Sprint 4 D3, prevents future schema/code drift bugs)
+- T-009-10 (wall-time metric, real timing) — F-Q1 candidate (e2e test)
+- T-011-13 (p95 <200ms with 1000 sync_runs rows) — F-Q1 candidate
+- F-Integ extension for F-005 + F-008 + F-009 paths — Sprint 6+ (closes Sprint 3 D5 + Sprint 4 D3 + Sprint 5 lock-driver semantics, prevents future schema/code drift bugs)
 - T-004-13 plaintext-token log canary — vacuous so far (no token data logged); revisit when sync paths run real data
 - Tidal scope verification (Ovidiu owns; src/providers/tidal/scopes.ts has TODO)
-- 4 new Tidal URL constants now have TODO(ovidiu) markers (M1 from Sprint 4 review): F-006 ISRC search, F-007 fuzzy search (already verified by F-007 teammate), F-008 playlist CRUD, F-008 PLAYLIST_PRIVACY value
+- 4 Tidal URL constants TODO(ovidiu) markers (M1 from Sprint 4 review): F-006 ISRC search, F-007 fuzzy search, F-008 playlist CRUD, F-008 PLAYLIST_PRIVACY
 - Wrangler upgrade (compat-date pinned to 2024-12-30)
 - D4 (Sprint 4 review): F-007 fuzzy search query normalises artist via title-normalisation helper — consider spec amendment or code change
-- Worktree-isolation harness bug (Sprints 2+3+4): `isolation: "worktree"` is silently a no-op; file separately
+- Worktree-isolation harness bug (Sprints 2+3+4+5): `isolation: "worktree"` is silently a no-op; file separately
