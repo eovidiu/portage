@@ -9,8 +9,9 @@ routes = [
   { pattern = "portage.eovidiu.co.uk/*", zone_id = "136764234985fbfbd0b14286b7bc34e1" }
 ]
 
+# 07:23 UTC (08:23 BST / 09:23 EEST) and 19:23 UTC (20:23 BST / 21:23 EEST)
 [triggers]
-crons = ["0 2,14 * * *"]
+crons = ["23 7 * * *", "23 19 * * *"]
 
 [vars]
 TIDAL_COUNTRY_CODE = "RO"
