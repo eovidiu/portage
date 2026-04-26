@@ -692,3 +692,24 @@ describe("T-013: boundary coordinates accepted", () => {
     expect(res.status).toBe(201);
   });
 });
+
+// Non-Error throw from ensureTrackExists (covers line 115 `err instanceof Error ? : ""` false branch)
+describe("T-013: ensureTrackExists — non-Error throw treated as service_unavailable", () => {
+  it("returns 503 when ensureTrackExists rejects with a non-Error value", async () => {
+    mockFindRecentCapture.mockResolvedValueOnce(null);
+    // Force the track-existence check to throw a non-Error value (string).
+    // The route's `err instanceof Error ? err.message : ""` short-circuits to "",
+    // which doesn't match "spotify_track_not_found" or "spotify_unauthorized",
+    // so the catch falls through to the generic service_unavailable branch.
+    mockSql.mockRejectedValueOnce("transient-network-string");
+
+    const res = await doFetch("/captures", {
+      method: "POST",
+      body: { spotify_id: VALID_SPOTIFY_ID, source: "siri" },
+    });
+
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe("service_unavailable");
+  });
+});
