@@ -1,5 +1,5 @@
 -- Source of truth for portage schema. Apply via Neon MCP or psql.
--- Last applied to project square-wave-04443485 on 2026-04-25 (updated C1+C2 fix).
+-- Last applied to project square-wave-04443485 on 2026-04-26 (added idx_tracks_added_at).
 --
 -- Invariants (application-layer enforcement — not DB CHECKs):
 --   I-001: tracks.spotify_id MUST appear in exactly one of matches OR unmatched at any time,
@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS oauth_state (
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_oauth_state_expires_at ON oauth_state(expires_at);
 CREATE INDEX IF NOT EXISTS idx_tracks_isrc          ON tracks(isrc) WHERE isrc IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tracks_added_at      ON tracks(spotify_added_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sync_runs_started_at ON sync_runs(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_matches_sync_run_id  ON matches(sync_run_id);
 CREATE INDEX IF NOT EXISTS idx_unmatched_status     ON unmatched(status, attempts);

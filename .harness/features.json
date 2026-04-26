@@ -11,15 +11,25 @@
       "description": "Health and status endpoints (/healthz, /readyz)",
       "priority": 1,
       "status": "passing",
-      "scope": ["src/routes/health.ts", "src/index.ts", "tests/routes/health.test.ts"],
+      "scope": [
+        "src/routes/health.ts",
+        "src/index.ts",
+        "tests/routes/health.test.ts"
+      ],
       "depends_on": [],
       "assigned_to": null,
       "test_file": "tests/routes/health.test.ts",
       "coverage": "100% statements, 94.11% branches, 100% functions, 100% lines on src/routes/health.ts (istanbul; uncovered branch: line 54 type-cast path)",
       "notes": "Bootstrap leaf. /healthz is dependency-free; /readyz checks for provider tokens (F-002, F-003, F-004) and DB connectivity. Implement /healthz first, layer in /readyz after F-002/F-003/F-004 ship.",
       "correction_cycles": 0,
-      "scope_expansions": ["wrangler.toml (added nodejs_compat flag)", "package.json (split test/test:coverage scripts)", "vitest.config.ts (removed thresholds that broke coverage run)"],
-      "approaches_tried": ["module-level vi.mock for @neondatabase/serverless with per-test mockSql resets; AbortController-based 2s DB timeout in Promise.race"],
+      "scope_expansions": [
+        "wrangler.toml (added nodejs_compat flag)",
+        "package.json (split test/test:coverage scripts)",
+        "vitest.config.ts (removed thresholds that broke coverage run)"
+      ],
+      "approaches_tried": [
+        "module-level vi.mock for @neondatabase/serverless with per-test mockSql resets; AbortController-based 2s DB timeout in Promise.race"
+      ],
       "failure_reason": null,
       "discovered_via": null
     },
@@ -30,15 +40,23 @@
       "description": "OAuth token encryption at rest (AES-256-GCM via Web Crypto)",
       "priority": 1,
       "status": "passing",
-      "scope": ["src/crypto/", "tests/crypto/"],
+      "scope": [
+        "src/crypto/",
+        "tests/crypto/"
+      ],
       "depends_on": [],
       "assigned_to": null,
       "test_file": "tests/crypto/roundtrip.test.ts",
       "coverage": 100,
       "notes": "Pure helper. Web Crypto API is built into Workers; no external library. 96-bit IV per encrypt; key from TOKEN_ENCRYPTION_KEY secret.",
       "correction_cycles": 0,
-      "scope_expansions": ["vitest.config.ts (provider: v8->istanbul)", "package.json (@vitest/coverage-istanbul devDep)"],
-      "approaches_tried": ["Web Crypto crypto.subtle.encrypt/decrypt with AES-GCM 256, 96-bit IV via crypto.getRandomValues, base64 key validation, IntegrityError on decrypt failure"],
+      "scope_expansions": [
+        "vitest.config.ts (provider: v8->istanbul)",
+        "package.json (@vitest/coverage-istanbul devDep)"
+      ],
+      "approaches_tried": [
+        "Web Crypto crypto.subtle.encrypt/decrypt with AES-GCM 256, 96-bit IV via crypto.getRandomValues, base64 key validation, IntegrityError on decrypt failure"
+      ],
       "failure_reason": null,
       "discovered_via": null
     },
@@ -46,18 +64,28 @@
       "id": "F004b",
       "spec": "docs/specs/F-004-token-encryption.md",
       "test_spec": "tests/db/provider_tokens.test.ts",
-      "description": "Token persistence helpers (persistTokens, loadTokens, markRevoked) + oauth_state table and helpers — DB-coupled wrapper around F-004 encryption primitives",
+      "description": "Token persistence helpers (persistTokens, loadTokens, markRevoked) + oauth_state table and helpers \u2014 DB-coupled wrapper around F-004 encryption primitives",
       "priority": 3,
       "status": "passing",
-      "scope": ["src/db/provider_tokens.ts", "src/db/oauth_state.ts", "tests/db/provider_tokens.test.ts", "tests/db/oauth_state.test.ts", "db/schema.sql"],
-      "depends_on": ["F004"],
+      "scope": [
+        "src/db/provider_tokens.ts",
+        "src/db/oauth_state.ts",
+        "tests/db/provider_tokens.test.ts",
+        "tests/db/oauth_state.test.ts",
+        "db/schema.sql"
+      ],
+      "depends_on": [
+        "F004"
+      ],
       "assigned_to": null,
       "test_file": "tests/db/provider_tokens.test.ts",
       "coverage": "100% statements, 100% branches, 100% functions, 100% lines on src/db/ (istanbul)",
-      "notes": "Split off from F-004 per Sprint 1 review decision D1. F-004 is encryption primitives only; F-004b owns the provider_tokens read/write path. F-002/F-003 OAuth flows consume this. Schema (status + access_token_iv + refresh_token_iv) was already provisioned in Sprint 1 fix wave (commit bd013a8). oauth_state table added via Neon MCP + db/schema.sql. neon() parameterized calls use array form (string, params[]) not spread args — TypeScript requires it.",
+      "notes": "Split off from F-004 per Sprint 1 review decision D1. F-004 is encryption primitives only; F-004b owns the provider_tokens read/write path. F-002/F-003 OAuth flows consume this. Schema (status + access_token_iv + refresh_token_iv) was already provisioned in Sprint 1 fix wave (commit bd013a8). oauth_state table added via Neon MCP + db/schema.sql. neon() parameterized calls use array form (string, params[]) not spread args \u2014 TypeScript requires it.",
       "correction_cycles": 0,
       "scope_expansions": [],
-      "approaches_tried": ["neon(DATABASE_URL)(sql, paramsArray) parameterized queries; Buffer.from(Uint8Array) for bytea params; encryptToken before UPSERT, decryptToken after SELECT"],
+      "approaches_tried": [
+        "neon(DATABASE_URL)(sql, paramsArray) parameterized queries; Buffer.from(Uint8Array) for bytea params; encryptToken before UPSERT, decryptToken after SELECT"
+      ],
       "failure_reason": null,
       "discovered_via": "F004"
     },
@@ -68,15 +96,25 @@
       "description": "API authentication (JWT, HS256, single bootstrap token)",
       "priority": 2,
       "status": "passing",
-      "scope": ["src/auth/", "src/middleware/", "scripts/mint-bootstrap-token.ts", "tests/auth/", "src/index.ts"],
-      "depends_on": ["F014"],
+      "scope": [
+        "src/auth/",
+        "src/middleware/",
+        "scripts/mint-bootstrap-token.ts",
+        "tests/auth/",
+        "src/index.ts"
+      ],
+      "depends_on": [
+        "F014"
+      ],
       "assigned_to": null,
       "test_file": "tests/auth/auth.test.ts",
-      "coverage": "src/auth: 95.83% stmts, 100% funcs; src/middleware: 97.5% stmts, 100% funcs; scripts/: mintBootstrapToken function 100% (CLI main() untestable from Workers sandbox — process.env/exit not available; istanbul ignore comments applied)",
-      "notes": "Jose error discrimination uses .code string matching (not instanceof) — Workers isolate uses browser jose build; instanceof fails across module boundaries. secretsGuard skips /healthz and /readyz only; JWT middleware skips /healthz, /readyz, /auth/spotify/callback, /auth/tidal/callback. Module-level validated cache reset via resetSecretsCache() export for test isolation. T-001-10 (latency p95) deferred to Sprint 3 e2e QA. Stub callbacks return 400; F-002/F-003 will replace.",
+      "coverage": "src/auth: 95.83% stmts, 100% funcs; src/middleware: 97.5% stmts, 100% funcs; scripts/: mintBootstrapToken function 100% (CLI main() untestable from Workers sandbox \u2014 process.env/exit not available; istanbul ignore comments applied)",
+      "notes": "Jose error discrimination uses .code string matching (not instanceof) \u2014 Workers isolate uses browser jose build; instanceof fails across module boundaries. secretsGuard skips /healthz and /readyz only; JWT middleware skips /healthz, /readyz, /auth/spotify/callback, /auth/tidal/callback. Module-level validated cache reset via resetSecretsCache() export for test isolation. T-001-10 (latency p95) deferred to Sprint 3 e2e QA. Stub callbacks return 400; F-002/F-003 will replace.",
       "correction_cycles": 0,
       "scope_expansions": [],
-      "approaches_tried": ["jose jwtVerify with .code string matching for error discrimination; secretsGuard with module-level cache; mintBootstrapToken as exported function (testable) + CLI wrapper with istanbul ignore"],
+      "approaches_tried": [
+        "jose jwtVerify with .code string matching for error discrimination; secretsGuard with module-level cache; mintBootstrapToken as exported function (testable) + CLI wrapper with istanbul ignore"
+      ],
       "failure_reason": null,
       "discovered_via": null
     },
@@ -87,15 +125,28 @@
       "description": "Spotify OAuth integration with refresh token rotation",
       "priority": 3,
       "status": "passing",
-      "scope": ["src/providers/spotify/", "src/routes/auth/spotify.ts", "src/index.ts", "tests/providers/spotify/", "tests/routes/auth/spotify.test.ts"],
-      "depends_on": ["F001", "F004", "F004b"],
+      "scope": [
+        "src/providers/spotify/",
+        "src/routes/auth/spotify.ts",
+        "src/index.ts",
+        "tests/providers/spotify/",
+        "tests/routes/auth/spotify.test.ts"
+      ],
+      "depends_on": [
+        "F001",
+        "F004",
+        "F004b"
+      ],
       "assigned_to": null,
       "test_file": "tests/providers/spotify/oauth.test.ts",
       "coverage": "src/providers/spotify/oauth.ts: 98.9% stmts, 93.54% branches, 93.33% funcs, 100% lines (istanbul); src/routes/auth/spotify.ts: 100% stmts, 100% branches, 100% funcs, 100% lines (istanbul). Gate met.",
-      "notes": "PKCE S256 via crypto.subtle.digest. R3: 32-byte state via crypto.getRandomValues → base64url. R5: no logging of sensitive values (no console calls in oauth.ts). R7: module-level Map<string, Promise<void>> via refreshSpotify() helper — both ensureFreshToken (L210) and spotifyFetch 401-retry (L232) go through it. R8: rotated refresh_token persisted if Spotify returns one. R9: redirect_uri from env.SPOTIFY_REDIRECT_URI. R10: User-Agent 'spotify-roon-sync/1.0'. R11: 401 triggers refreshSpotify + retry once. vi.mock for both F-004b stub modules. Deferred: T-002-02/03 large-sample 1000-iteration entropy/uniqueness tests deferred to e2e Sprint 3.",
+      "notes": "PKCE S256 via crypto.subtle.digest. R3: 32-byte state via crypto.getRandomValues \u2192 base64url. R5: no logging of sensitive values (no console calls in oauth.ts). R7: module-level Map<string, Promise<void>> via refreshSpotify() helper \u2014 both ensureFreshToken (L210) and spotifyFetch 401-retry (L232) go through it. R8: rotated refresh_token persisted if Spotify returns one. R9: redirect_uri from env.SPOTIFY_REDIRECT_URI. R10: User-Agent 'spotify-roon-sync/1.0'. R11: 401 triggers refreshSpotify + retry once. vi.mock for both F-004b stub modules. Deferred: T-002-02/03 large-sample 1000-iteration entropy/uniqueness tests deferred to e2e Sprint 3.",
       "correction_cycles": 1,
       "scope_expansions": [],
-      "approaches_tried": ["Web Crypto crypto.getRandomValues for state/PKCE, crypto.subtle.digest for SHA-256 challenge; module-level Map for R7 coalescing; vi.mock for F-004b stubs; SpotifyAuthError typed error class for discriminated error handling in route layer", "M1 fix: factored refreshSpotify() helper used by both ensureFreshToken and 401-retry path; M3 fix: removed defensive throws at old L208/L235/L27, added T-002-12b mixed-path coalescing test + T-002-14b happy-path test + 4 coverage gap tests"],
+      "approaches_tried": [
+        "Web Crypto crypto.getRandomValues for state/PKCE, crypto.subtle.digest for SHA-256 challenge; module-level Map for R7 coalescing; vi.mock for F-004b stubs; SpotifyAuthError typed error class for discriminated error handling in route layer",
+        "M1 fix: factored refreshSpotify() helper used by both ensureFreshToken and 401-retry path; M3 fix: removed defensive throws at old L208/L235/L27, added T-002-12b mixed-path coalescing test + T-002-14b happy-path test + 4 coverage gap tests"
+      ],
       "failure_reason": null,
       "discovered_via": null
     },
@@ -106,15 +157,28 @@
       "description": "Tidal OAuth integration with refresh token rotation",
       "priority": 3,
       "status": "passing",
-      "scope": ["src/providers/tidal/", "src/routes/auth/tidal.ts", "src/index.ts", "tests/providers/tidal/", "tests/routes/auth/tidal.test.ts"],
-      "depends_on": ["F001", "F004", "F004b"],
+      "scope": [
+        "src/providers/tidal/",
+        "src/routes/auth/tidal.ts",
+        "src/index.ts",
+        "tests/providers/tidal/",
+        "tests/routes/auth/tidal.test.ts"
+      ],
+      "depends_on": [
+        "F001",
+        "F004",
+        "F004b"
+      ],
       "assigned_to": null,
       "test_file": "tests/providers/tidal/oauth.test.ts",
       "coverage": "src/providers/tidal/: 98.92% stmts, 97.43% branches, 92.3% funcs; src/routes/auth/tidal.ts: 100% stmts, 90% branches, 100% funcs (istanbul; post-M2+D4+M5 fix wave)",
       "notes": "Mirrors F-002 structure. Scopes in src/providers/tidal/scopes.ts need Ovidiu to verify against Tidal Developer Portal app config. tidalFetch() client handles R7 headers, R8 countryCode, R9 401-retry, R11 v2 media-type tolerance, R6 refresh coalescing. All fetch() calls use Request objects for testability in Workers sandbox. T-003-02,T-003-04,T-003-06,T-003-08,T-003-12 wall-clock/live-API tests deferred to e2e. Route mount is now symmetric with Spotify: both use app.route('/auth', routes) and sub-router has /tidal or /spotify prefix internally.",
       "correction_cycles": 0,
       "scope_expansions": [],
-      "approaches_tried": ["fetch(new Request(...)) pattern required — Workers sandbox mock receives the Request object; fetch(url, opts) pattern causes undefined in mock handlers", "M2 fix: discriminated revoke check (status 400 + body invalid_grant/invalid_request); D4: added T-003-15 multi-canary; M5: harmonized route mount under /auth prefix"],
+      "approaches_tried": [
+        "fetch(new Request(...)) pattern required \u2014 Workers sandbox mock receives the Request object; fetch(url, opts) pattern causes undefined in mock handlers",
+        "M2 fix: discriminated revoke check (status 400 + body invalid_grant/invalid_request); D4: added T-003-15 multi-canary; M5: harmonized route mount under /auth prefix"
+      ],
       "failure_reason": null,
       "discovered_via": null
     },
@@ -122,18 +186,28 @@
       "id": "F-Integ",
       "spec": null,
       "test_spec": null,
-      "description": "Neon-branch integration test for OAuth callbacks → F-004b persist round-trip (closes the mock-only gap from Sprint 2 M4 + Sprint 1 D5)",
+      "description": "Neon-branch integration test for OAuth callbacks \u2192 F-004b persist round-trip (closes the mock-only gap from Sprint 2 M4 + Sprint 1 D5)",
       "priority": 4,
       "status": "passing",
       "assigned_to": null,
-      "scope": ["tests/integration/", "vitest.integration.config.ts", "package.json"],
-      "depends_on": ["F002", "F003", "F004b"],
+      "scope": [
+        "tests/integration/",
+        "vitest.integration.config.ts",
+        "package.json"
+      ],
+      "depends_on": [
+        "F002",
+        "F003",
+        "F004b"
+      ],
       "test_file": "tests/integration/oauth-spotify.test.ts",
-      "coverage": "n/a — integration tests run in Node (not Workers sandbox); coverage tooling not applicable. 8/8 tests pass: 4 Spotify + 4 Tidal.",
-      "notes": "Sprint 3 opener. Pattern: Neon Management API create_branch → waitForEndpoint warmup → apply db/schema.sql via @neondatabase/serverless → mock only outbound Spotify/Tidal fetch (pass Neon HTTP through) → real persistTokens/loadTokens round-trip → assert plaintext canary survives encrypt+UPSERT+SELECT+decrypt → delete_branch in afterAll. Key gotcha: vi.spyOn(globalThis, 'fetch') intercepts ALL fetch including @neondatabase/serverless HTTP queries — must use a selective mock that passes non-Spotify/Tidal URLs to realFetch. Branch lifecycle: one branch per test file (not per test) to amortize the 5-15s creation cost. Unit suite (npm test) unchanged at 172/172 via exclude in vitest.config.ts.",
+      "coverage": "n/a \u2014 integration tests run in Node (not Workers sandbox); coverage tooling not applicable. 8/8 tests pass: 4 Spotify + 4 Tidal.",
+      "notes": "Sprint 3 opener. Pattern: Neon Management API create_branch \u2192 waitForEndpoint warmup \u2192 apply db/schema.sql via @neondatabase/serverless \u2192 mock only outbound Spotify/Tidal fetch (pass Neon HTTP through) \u2192 real persistTokens/loadTokens round-trip \u2192 assert plaintext canary survives encrypt+UPSERT+SELECT+decrypt \u2192 delete_branch in afterAll. Key gotcha: vi.spyOn(globalThis, 'fetch') intercepts ALL fetch including @neondatabase/serverless HTTP queries \u2014 must use a selective mock that passes non-Spotify/Tidal URLs to realFetch. Branch lifecycle: one branch per test file (not per test) to amortize the 5-15s creation cost. Unit suite (npm test) unchanged at 172/172 via exclude in vitest.config.ts.",
       "correction_cycles": 0,
       "scope_expansions": [],
-      "approaches_tried": ["vi.spyOn(globalThis.fetch).mockResolvedValueOnce — intercepted Neon HTTP queries, crashed processQueryResult; switched to selective URL-discriminating mock that passes non-provider URLs to realFetch"],
+      "approaches_tried": [
+        "vi.spyOn(globalThis.fetch).mockResolvedValueOnce \u2014 intercepted Neon HTTP queries, crashed processQueryResult; switched to selective URL-discriminating mock that passes non-provider URLs to realFetch"
+      ],
       "failure_reason": null,
       "discovered_via": "F004b"
     },
@@ -145,14 +219,25 @@
       "priority": 9,
       "status": "passing",
       "assigned_to": null,
-      "scope": ["tests/e2e/", "scripts/run-e2e.sh", "vitest.e2e.config.ts", "package.json"],
-      "depends_on": ["F001", "F002", "F003"],
+      "scope": [
+        "tests/e2e/",
+        "scripts/run-e2e.sh",
+        "vitest.e2e.config.ts",
+        "package.json"
+      ],
+      "depends_on": [
+        "F001",
+        "F002",
+        "F003"
+      ],
       "test_file": "tests/e2e/auth-latency.test.ts",
-      "coverage": "n/a — e2e tests exercise real wrangler dev process; no instrumentation",
+      "coverage": "n/a \u2014 e2e tests exercise real wrangler dev process; no instrumentation",
       "notes": "Sprint 3. Spawns wrangler dev (port 8787) in child_process, polls /healthz for readiness, runs vitest with vitest.e2e.config.ts (Node pool, not Workers pool). JWT_SECRET read from .dev.vars with quote-stripping (wrangler strips quotes; Node file parse must match). All 6 deferred tests now mechanical: T-001-10, T-014-03, T-014-11, T-002-02, T-002-03, T-003-02. Measured on Apple M-series Mac: T-014-03 p95=1.15ms, T-014-11 max=163ms, T-001-10 p95=1.19ms, T-002-02/T-003-02 min_bits=256/384. Thresholds may fail on slow/shared CI hardware. `npm run test:e2e` entry point.",
       "correction_cycles": 0,
       "scope_expansions": [],
-      "approaches_tried": ["child_process.spawn + waitForPort polling /healthz; SIGTERM+SIGKILL fallback; JWT minted from .dev.vars JWT_SECRET with quote-strip fix"],
+      "approaches_tried": [
+        "child_process.spawn + waitForPort polling /healthz; SIGTERM+SIGKILL fallback; JWT minted from .dev.vars JWT_SECRET with quote-strip fix"
+      ],
       "failure_reason": null,
       "discovered_via": "F014"
     },
@@ -163,15 +248,29 @@
       "description": "Spotify Liked Songs incremental fetch with cursor",
       "priority": 4,
       "status": "passing",
-      "scope": ["src/providers/spotify/liked.ts", "src/db/tracks.ts", "src/db/sync_state.ts", "tests/providers/spotify/liked.test.ts", "tests/db/tracks.test.ts", "tests/db/sync_state.test.ts"],
-      "depends_on": ["F002", "F004", "F004b"],
+      "scope": [
+        "src/providers/spotify/liked.ts",
+        "src/db/tracks.ts",
+        "src/db/sync_state.ts",
+        "tests/providers/spotify/liked.test.ts",
+        "tests/db/tracks.test.ts",
+        "tests/db/sync_state.test.ts"
+      ],
+      "depends_on": [
+        "F002",
+        "F004",
+        "F004b"
+      ],
       "assigned_to": null,
       "test_file": "tests/providers/spotify/liked.test.ts",
-      "coverage": "TOOLING BLOCKER: @cloudflare/vitest-pool-workers does not instrument code paths — coverage-final.json shows 0/N statements for all source files including F-004b (reported 100%) and F-002 (reported 98.9%). The Workers sandbox does not execute istanbul instrumentation hooks. 14/14 T-005 tests pass; 172/172 total unit tests pass. Coverage measurement requires non-Workers vitest config; see vitest.integration.config.ts pattern. Same tooling gap documented in context_summary.md Gotchas.",
-      "notes": "Cursor advance is atomic with last page persist (I-005) via db.transaction(). Collect-all-pages-then-persist pattern prevents partial inserts on multi-page fetch failure. R11: cutoff = cursor - 60s. R7: sleep Retry-After then retry once; second 429 throws. R4: skip is_local or non-track type. R2: isrc = external_ids?.isrc ?? null. R3: spotify_added_at from envelope added_at, not track album.release_date.",
-      "correction_cycles": 0,
+      "coverage": "src/providers/spotify/liked.ts: 100% stmts, 89.47% branches, 100% funcs, 100% lines (istanbul; uncovered branches: lines 57 Retry-After ?? default, 89-92 null-coalescing for absent album/duration_ms/artists fields \u2014 Spotify edge cases not testable without live API). src/db/tracks.ts: 100/100/100/100. src/db/sync_state.ts: 100/100/100/100. Gate met.",
+      "notes": "C1 fix: transaction uses sync-callback array form (txSql) => [...queries] per @neondatabase/serverless API \u2014 async callback form is a type error. M1 fix: replaced raw fetch+ensureFreshToken with spotifyFetch from oauth.ts (coalesced 401-refresh). M3: added idx_tracks_added_at to db/schema.sql; amended F-005 spec for album/duration_ms/first_seen_at nullability. Index NOT YET applied to Neon production (permission denied \u2014 requires manual: CREATE INDEX IF NOT EXISTS idx_tracks_added_at ON tracks(spotify_added_at DESC)).",
+      "correction_cycles": 2,
       "scope_expansions": [],
-      "approaches_tried": ["collect-all-pages-then-persist with atomic cursor advance via db.transaction() on last page; vi.mock for @neondatabase/serverless with transaction mock; vi.mock ensureFreshToken; vi.useFakeTimers for T-005-11 Retry-After timing"],
+      "approaches_tried": [
+        "collect-all-pages-then-persist with atomic cursor advance via db.transaction() on last page; vi.mock for @neondatabase/serverless with transaction mock; vi.mock ensureFreshToken; vi.useFakeTimers for T-005-11 Retry-After timing",
+        "C1 fix: refactored db.transaction to sync-callback array-of-NeonQueryInTransaction form; M1 fix: replaced raw fetch with spotifyFetch from oauth.ts; M3: added idx_tracks_added_at + amended F-005 spec for album/duration_ms nullability"
+      ],
       "failure_reason": null,
       "discovered_via": null
     },
@@ -182,8 +281,15 @@
       "description": "ISRC-based exact track matching (Spotify -> Tidal)",
       "priority": 5,
       "status": "pending",
-      "scope": ["src/match/isrc.ts", "src/db/matches.ts", "tests/match/isrc.test.ts"],
-      "depends_on": ["F003", "F005"],
+      "scope": [
+        "src/match/isrc.ts",
+        "src/db/matches.ts",
+        "tests/match/isrc.test.ts"
+      ],
+      "depends_on": [
+        "F003",
+        "F005"
+      ],
       "assigned_to": null,
       "test_file": null,
       "coverage": null,
@@ -201,8 +307,15 @@
       "description": "Fuzzy track matching fallback (artist + title + duration)",
       "priority": 6,
       "status": "pending",
-      "scope": ["src/match/fuzzy.ts", "src/db/unmatched.ts", "tests/match/fuzzy.test.ts"],
-      "depends_on": ["F003", "F006"],
+      "scope": [
+        "src/match/fuzzy.ts",
+        "src/db/unmatched.ts",
+        "tests/match/fuzzy.test.ts"
+      ],
+      "depends_on": [
+        "F003",
+        "F006"
+      ],
       "assigned_to": null,
       "test_file": null,
       "coverage": null,
@@ -220,8 +333,15 @@
       "description": "Tidal playlist write (idempotent batch append)",
       "priority": 6,
       "status": "pending",
-      "scope": ["src/providers/tidal/playlist.ts", "tests/providers/tidal/playlist.test.ts"],
-      "depends_on": ["F003", "F006", "F007"],
+      "scope": [
+        "src/providers/tidal/playlist.ts",
+        "tests/providers/tidal/playlist.test.ts"
+      ],
+      "depends_on": [
+        "F003",
+        "F006",
+        "F007"
+      ],
       "assigned_to": null,
       "test_file": null,
       "coverage": null,
@@ -239,8 +359,16 @@
       "description": "Sync run logging and metrics (sync_runs table + GET endpoints)",
       "priority": 7,
       "status": "pending",
-      "scope": ["src/db/sync_runs.ts", "src/routes/sync/status.ts", "src/routes/sync/runs.ts", "src/routes/stats.ts", "tests/routes/sync/"],
-      "depends_on": ["F001"],
+      "scope": [
+        "src/db/sync_runs.ts",
+        "src/routes/sync/status.ts",
+        "src/routes/sync/runs.ts",
+        "src/routes/stats.ts",
+        "tests/routes/sync/"
+      ],
+      "depends_on": [
+        "F001"
+      ],
       "assigned_to": null,
       "test_file": null,
       "coverage": null,
@@ -258,8 +386,18 @@
       "description": "Sync orchestration (POST /sync/run + engine)",
       "priority": 8,
       "status": "pending",
-      "scope": ["src/sync/orchestrator.ts", "src/routes/sync/run.ts", "tests/sync/orchestrator.test.ts"],
-      "depends_on": ["F005", "F006", "F007", "F008", "F011"],
+      "scope": [
+        "src/sync/orchestrator.ts",
+        "src/routes/sync/run.ts",
+        "tests/sync/orchestrator.test.ts"
+      ],
+      "depends_on": [
+        "F005",
+        "F006",
+        "F007",
+        "F008",
+        "F011"
+      ],
       "assigned_to": null,
       "test_file": null,
       "coverage": null,
@@ -277,8 +415,14 @@
       "description": "Scheduled execution (Workers cron, 2x daily)",
       "priority": 9,
       "status": "pending",
-      "scope": ["src/scheduled.ts", "wrangler.toml", "tests/scheduled.test.ts"],
-      "depends_on": ["F009"],
+      "scope": [
+        "src/scheduled.ts",
+        "wrangler.toml",
+        "tests/scheduled.test.ts"
+      ],
+      "depends_on": [
+        "F009"
+      ],
       "assigned_to": null,
       "test_file": null,
       "coverage": null,
@@ -296,8 +440,16 @@
       "description": "Unmatched review queue (GET/POST /unmatched)",
       "priority": 9,
       "status": "pending",
-      "scope": ["src/routes/unmatched.ts", "src/db/unmatched.ts", "tests/routes/unmatched.test.ts"],
-      "depends_on": ["F001", "F007", "F008"],
+      "scope": [
+        "src/routes/unmatched.ts",
+        "src/db/unmatched.ts",
+        "tests/routes/unmatched.test.ts"
+      ],
+      "depends_on": [
+        "F001",
+        "F007",
+        "F008"
+      ],
       "assigned_to": null,
       "test_file": null,
       "coverage": null,
@@ -315,8 +467,15 @@
       "description": "Captures API for iOS companion (GET/POST /captures)",
       "priority": 9,
       "status": "pending",
-      "scope": ["src/routes/captures.ts", "src/db/captures.ts", "tests/routes/captures.test.ts"],
-      "depends_on": ["F001", "F009"],
+      "scope": [
+        "src/routes/captures.ts",
+        "src/db/captures.ts",
+        "tests/routes/captures.test.ts"
+      ],
+      "depends_on": [
+        "F001",
+        "F009"
+      ],
       "assigned_to": null,
       "test_file": null,
       "coverage": null,

@@ -7,7 +7,7 @@ vi.mock("@neondatabase/serverless", () => ({
   neon: () => mockQuery,
 }));
 
-import { readCursor, writeCursor } from "../../src/db/sync_state";
+import { readCursor, buildCursorQuery } from "../../src/db/sync_state";
 
 const makeEnv = (): Env => ({
   DATABASE_URL: "postgresql://test",
@@ -48,12 +48,12 @@ describe("readCursor", () => {
   });
 });
 
-describe("writeCursor", () => {
-  it("issues an UPSERT with the key and value", async () => {
-    mockQuery.mockResolvedValueOnce([]);
-    await writeCursor(mockQuery, "spotify_cursor", "2026-04-25T07:00:00Z");
-    expect(mockQuery).toHaveBeenCalledOnce();
-    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+describe("buildCursorQuery", () => {
+  it("returns a query (thenable) with the UPSERT SQL and correct params", () => {
+    const mockTxSql = vi.fn().mockReturnValue(Promise.resolve([]));
+    buildCursorQuery(mockTxSql as Parameters<typeof buildCursorQuery>[0], "spotify_cursor", "2026-04-25T07:00:00Z");
+    expect(mockTxSql).toHaveBeenCalledOnce();
+    const [sql, params] = mockTxSql.mock.calls[0] as [string, unknown[]];
     expect(sql.toLowerCase()).toContain("on conflict");
     expect(params[0]).toBe("spotify_cursor");
     expect(params[1]).toBe("2026-04-25T07:00:00Z");

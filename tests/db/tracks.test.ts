@@ -7,7 +7,7 @@ vi.mock("@neondatabase/serverless", () => ({
   neon: () => mockQuery,
 }));
 
-import { upsertTracks, countTracks, type TrackRow } from "../../src/db/tracks";
+import { upsertTracks, buildUpsertQueries, countTracks, type TrackRow } from "../../src/db/tracks";
 
 const makeEnv = (): Env => ({
   DATABASE_URL: "postgresql://test",
@@ -39,14 +39,14 @@ beforeEach(() => {
 
 describe("upsertTracks", () => {
   it("returns 0 for empty input without calling sql", async () => {
-    const result = await upsertTracks(mockQuery, []);
+    const result = await upsertTracks(mockQuery as Parameters<typeof upsertTracks>[0], []);
     expect(result).toBe(0);
     expect(mockQuery).not.toHaveBeenCalled();
   });
 
   it("uses ON CONFLICT DO NOTHING in SQL", async () => {
     mockQuery.mockResolvedValueOnce([{ spotify_id: "abc123" }]);
-    await upsertTracks(mockQuery, [track]);
+    await upsertTracks(mockQuery as Parameters<typeof upsertTracks>[0], [track]);
     const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(sql.toLowerCase()).toContain("on conflict");
     expect(sql.toLowerCase()).toContain("do nothing");
@@ -54,9 +54,9 @@ describe("upsertTracks", () => {
 
   it("returns count of actually-inserted rows", async () => {
     mockQuery
-      .mockResolvedValueOnce([{ spotify_id: "a" }]) // inserted
-      .mockResolvedValueOnce([]);                   // conflict (not inserted)
-    const result = await upsertTracks(mockQuery, [
+      .mockResolvedValueOnce([{ spotify_id: "a" }])
+      .mockResolvedValueOnce([]);
+    const result = await upsertTracks(mockQuery as Parameters<typeof upsertTracks>[0], [
       { ...track, spotify_id: "a" },
       { ...track, spotify_id: "b" },
     ]);
@@ -65,7 +65,7 @@ describe("upsertTracks", () => {
 
   it("passes all 7 columns in correct order", async () => {
     mockQuery.mockResolvedValueOnce([{ spotify_id: "abc123" }]);
-    await upsertTracks(mockQuery, [track]);
+    await upsertTracks(mockQuery as Parameters<typeof upsertTracks>[0], [track]);
     const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(params[0]).toBe("abc123");
     expect(params[1]).toBe("GBUM71029604");
@@ -78,9 +78,28 @@ describe("upsertTracks", () => {
 
   it("passes null isrc when absent", async () => {
     mockQuery.mockResolvedValueOnce([{ spotify_id: "x" }]);
-    await upsertTracks(mockQuery, [{ ...track, spotify_id: "x", isrc: null }]);
+    await upsertTracks(mockQuery as Parameters<typeof upsertTracks>[0], [{ ...track, spotify_id: "x", isrc: null }]);
     const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(params[1]).toBeNull();
+  });
+});
+
+describe("buildUpsertQueries", () => {
+  it("returns one query per track", () => {
+    const mockTxSql = vi.fn().mockReturnValue(Promise.resolve([]));
+    const queries = buildUpsertQueries(
+      mockTxSql as Parameters<typeof buildUpsertQueries>[0],
+      [track, { ...track, spotify_id: "xyz" }],
+    );
+    expect(queries).toHaveLength(2);
+    expect(mockTxSql).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns empty array for zero tracks", () => {
+    const mockTxSql = vi.fn();
+    const queries = buildUpsertQueries(mockTxSql as Parameters<typeof buildUpsertQueries>[0], []);
+    expect(queries).toHaveLength(0);
+    expect(mockTxSql).not.toHaveBeenCalled();
   });
 });
 

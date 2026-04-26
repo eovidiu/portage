@@ -1,4 +1,4 @@
-import { neon } from "@neondatabase/serverless";
+import { neon, type NeonQueryFunction, type NeonQueryFunctionInTransaction } from "@neondatabase/serverless";
 import type { Env } from "../env";
 
 export interface TrackRow {
@@ -11,10 +11,10 @@ export interface TrackRow {
   spotify_added_at: string;
 }
 
-// Upserts a batch of tracks, ON CONFLICT DO NOTHING (idempotent per F-005-R8).
+// Upserts a batch of tracks outside a transaction, ON CONFLICT DO NOTHING (idempotent per F-005-R8).
 // Returns the number of rows actually inserted.
 export async function upsertTracks(
-  sql: ReturnType<typeof neon>,
+  sql: NeonQueryFunction<false, false>,
   tracks: TrackRow[],
 ): Promise<number> {
   if (tracks.length === 0) return 0;
@@ -29,13 +29,31 @@ export async function upsertTracks(
        RETURNING spotify_id`,
       [t.spotify_id, t.isrc, t.artist, t.title, t.album, t.duration_ms, t.spotify_added_at],
     );
-    if (rows.length > 0) inserted++;
+    if ((rows as Record<string, unknown>[]).length > 0) inserted++;
   }
   return inserted;
+}
+
+// Builds un-awaited upsert queries for use inside a db.transaction() sync callback.
+// Returns one NeonQueryInTransaction per track.
+export function buildUpsertQueries(
+  txSql: NeonQueryFunctionInTransaction<false, false>,
+  tracks: TrackRow[],
+) {
+  return tracks.map((t) =>
+    txSql(
+      `INSERT INTO tracks
+         (spotify_id, isrc, artist, title, album, duration_ms, spotify_added_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (spotify_id) DO NOTHING
+       RETURNING spotify_id`,
+      [t.spotify_id, t.isrc, t.artist, t.title, t.album, t.duration_ms, t.spotify_added_at],
+    )
+  );
 }
 
 export async function countTracks(env: Env): Promise<number> {
   const sql = neon(env.DATABASE_URL);
   const rows = await sql(`SELECT COUNT(*)::integer AS n FROM tracks`, []);
-  return rows[0].n as number;
+  return (rows as Record<string, unknown>[])[0].n as number;
 }

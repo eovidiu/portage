@@ -7,17 +7,19 @@
 //
 // Atomicity (I-005 / F-005-R6): non-final pages are persisted without touching
 // the cursor. The final page's inserts and cursor advance are in a single
-// @neondatabase/serverless transaction so a partial run never advances the cursor.
+// @neondatabase/serverless transaction (sync-callback array form) so a partial
+// run never advances the cursor.
+//
+// 401 handling: delegates to spotifyFetch from oauth.ts (coalesced refresh + retry).
 
 import { neon } from "@neondatabase/serverless";
-import { ensureFreshToken } from "./oauth";
-import { upsertTracks, type TrackRow } from "../../db/tracks";
-import { readCursor, writeCursor } from "../../db/sync_state";
+import { spotifyFetch } from "./oauth";
+import { buildUpsertQueries, upsertTracks, type TrackRow } from "../../db/tracks";
+import { readCursor, buildCursorQuery } from "../../db/sync_state";
 import type { Env } from "../../env";
 
 const LIKED_SONGS_URL = "https://api.spotify.com/v1/me/tracks?limit=50";
 const CURSOR_KEY = "spotify_cursor";
-const USER_AGENT = "spotify-roon-sync/1.0";
 const CLOCK_SKEW_MS = 60_000;
 
 interface SpotifyTrack {
@@ -47,27 +49,15 @@ export interface FetchResult {
   tracksSkipped: number;
 }
 
-async function fetchPageWithRetry(
-  url: string,
-  accessToken: string,
-): Promise<SpotifyTracksPage> {
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "User-Agent": USER_AGENT,
-    },
-  });
+async function fetchPage(env: Env, url: string): Promise<SpotifyTracksPage> {
+  // M1: use spotifyFetch for 401-coalesced-refresh + retry (F-002-R11)
+  const response = await spotifyFetch(env, url);
 
   if (response.status === 429) {
     const retryAfter = parseInt(response.headers.get("Retry-After") ?? "1", 10);
     await new Promise((r) => setTimeout(r, retryAfter * 1000));
 
-    const retryResponse = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "User-Agent": USER_AGENT,
-      },
-    });
+    const retryResponse = await spotifyFetch(env, url);
 
     if (retryResponse.status === 429) {
       throw new Error("Spotify rate limit: second 429 received, aborting run");
@@ -105,25 +95,23 @@ function toTrackRow(item: SpotifyPageItem): TrackRow {
 }
 
 export async function fetchLikedSongs(env: Env): Promise<FetchResult> {
-  const accessToken = await ensureFreshToken(env);
   const cursor = await readCursor(env, CURSOR_KEY);
   const cutoff = new Date(new Date(cursor).getTime() - CLOCK_SKEW_MS);
 
   const db = neon(env.DATABASE_URL);
 
   let url: string | null = LIKED_SONGS_URL;
-  let pageIndex = 0;
   let totalInserted = 0;
   let totalSkipped = 0;
   let maxAddedAt: Date | null = null;
 
   // Collect all pages first so we can identify the final page for atomic cursor advance.
-  // Throw on any fetch error — partial collections do not persist anything.
-  const allPages: Array<{ tracks: TrackRow[]; skipped: number; nextUrl: string | null }> = [];
+  // Any fetch error propagates immediately — partial collections do not persist anything.
+  const allPages: Array<{ tracks: TrackRow[]; skipped: number }> = [];
   let stopPagination = false;
 
   while (url !== null && !stopPagination) {
-    const page = await fetchPageWithRetry(url, accessToken);
+    const page = await fetchPage(env, url);
 
     const tracksForPage: TrackRow[] = [];
     let skippedOnPage = 0;
@@ -149,9 +137,8 @@ export async function fetchLikedSongs(env: Env): Promise<FetchResult> {
       }
     }
 
-    allPages.push({ tracks: tracksForPage, skipped: skippedOnPage, nextUrl: page.next ?? null });
+    allPages.push({ tracks: tracksForPage, skipped: skippedOnPage });
     url = stopPagination ? null : (page.next ?? null);
-    pageIndex++;
   }
 
   // Persist all pages. The final page's inserts are atomic with the cursor advance (I-005).
@@ -161,13 +148,17 @@ export async function fetchLikedSongs(env: Env): Promise<FetchResult> {
     let inserted: number;
 
     if (isLastPage && maxAddedAt !== null) {
-      // I-005: atomic transaction — tracks inserts + cursor advance
-      let atomicInserted = 0;
-      await db.transaction(async (txSql) => {
-        atomicInserted = await upsertTracks(txSql, tracks);
-        await writeCursor(txSql, CURSOR_KEY, maxAddedAt!.toISOString());
-      });
-      inserted = atomicInserted;
+      // C1 fix: sync-callback array form required by @neondatabase/serverless transaction API
+      // Each txSql(...) call returns an un-awaited NeonQueryInTransaction; driver executes them atomically.
+      const newCursor = maxAddedAt.toISOString();
+      const results = await db.transaction((txSql) => [
+        ...buildUpsertQueries(txSql, tracks),
+        buildCursorQuery(txSql, CURSOR_KEY, newCursor),
+      ]);
+      // results is QueryRows[][]; each upsert returns RETURNING rows (0 or 1 row per insert).
+      // The last result is the cursor UPSERT — skip it for the insert count.
+      const upsertResults = results.slice(0, tracks.length);
+      inserted = upsertResults.filter((r) => (r as Record<string, unknown>[]).length > 0).length;
     } else {
       inserted = await upsertTracks(db, tracks);
     }
@@ -181,17 +172,6 @@ export async function fetchLikedSongs(env: Env): Promise<FetchResult> {
       items_seen: tracks.length + skipped,
       items_persisted: inserted,
       items_skipped: skipped,
-    }));
-  }
-
-  // Edge case: no pages fetched at all (account empty or cursor already at tip)
-  if (allPages.length === 0) {
-    console.log(JSON.stringify({
-      event: "fetch_page",
-      page_index: 0,
-      items_seen: 0,
-      items_persisted: 0,
-      items_skipped: 0,
     }));
   }
 
