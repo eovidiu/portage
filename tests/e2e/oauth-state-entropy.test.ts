@@ -32,13 +32,19 @@ function extractState(location: string): string {
   return state;
 }
 
-/** Decode a base64url string and return its byte length. */
-function base64urlByteLength(s: string): number {
-  // Restore standard base64 padding
+/** Return the entropy bit-length of a state string, detecting encoding automatically.
+ *  Hex strings (all [0-9a-f], even length) measure length/2 bytes × 8 bits.
+ *  All other strings are treated as base64url and decoded to byte length.
+ */
+function stateBitLength(s: string): number {
+  if (/^[0-9a-f]+$/.test(s) && s.length % 2 === 0) {
+    // Hex-encoded: 2 chars per byte
+    return (s.length / 2) * 8;
+  }
+  // base64url: restore padding and decode
   const padded = s.replace(/-/g, "+").replace(/_/g, "/");
   const padLen = (4 - (padded.length % 4)) % 4;
-  const b64 = padded + "=".repeat(padLen);
-  return atob(b64).length;
+  return atob(padded + "=".repeat(padLen)).length * 8;
 }
 
 async function collectStates(provider: "spotify" | "tidal", count: number): Promise<string[]> {
@@ -73,8 +79,7 @@ describe("T-002-02/T-002-03: Spotify OAuth state entropy and uniqueness", () => 
   });
 
   it(`T-002-02: minimum state entropy across ${SAMPLE_COUNT} samples is ≥ 256 bits`, () => {
-    const bitLengths = states.map((s) => base64urlByteLength(s) * 8);
-    const minBits = Math.min(...bitLengths);
+    const minBits = Math.min(...states.map(stateBitLength));
     console.info(`T-002-02 spotify min_bits=${minBits} (threshold: 256)`);
     expect(minBits).toBeGreaterThanOrEqual(256);
   });
@@ -95,8 +100,7 @@ describe("T-003-02: Tidal OAuth state entropy", () => {
   });
 
   it(`T-003-02: minimum state entropy across ${SAMPLE_COUNT} samples is ≥ 256 bits`, () => {
-    const bitLengths = states.map((s) => base64urlByteLength(s) * 8);
-    const minBits = Math.min(...bitLengths);
+    const minBits = Math.min(...states.map(stateBitLength));
     console.info(`T-003-02 tidal min_bits=${minBits} (threshold: 256)`);
     expect(minBits).toBeGreaterThanOrEqual(256);
   });
