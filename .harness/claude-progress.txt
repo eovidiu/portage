@@ -3,47 +3,52 @@
 # Created: 2026-04-25
 
 ## Session 1 - Initialization (2026-04-25)
-- Created harness v3.5.0 scaffolding
-- Stack: TypeScript / Cloudflare Workers / Hono / @neondatabase/serverless / vitest / wrangler
-- Git identity: Ovidiu Eftimie <eovidiu@gmail.com>, ~/.ssh/id_ed25519, github.com
-- Loaded 14 features (F-001..F-014); two soft-dep cycles documented
+- Created harness v3.5.0 scaffolding; 14 features loaded; two soft-dep cycles documented
 
 ## Session 2 - Sprint 1: scaffold + F014 + F004 + DB schema (2026-04-25)
-- Team: portage-sprint-1 (4 implementers + 1 Opus reviewer)
-- 11 commits on main, 27/27 tests passing, coverage cleared 95% gate
-- F-004b discovered + added to docket (D1 from Sprint 1 review)
+- Team portage-sprint-1: 11 commits, 27/27 tests, F-004b discovered
 - Pushed to origin/main
 
 ## Session 3 - Sprint 2: F-001 + F-002 + F-003 + F-004b (2026-04-25)
-- Team: portage-sprint-2 (4 implementers + 1 Opus reviewer + 2-way fix wave)
-- 16 commits on main (cumulative 17), 148/148 tests, coverage 95%+ everywhere
-- Lead-stub interface pattern enabled true 3-way parallel implementation
-- F-Integ + F-Q1 discovered as Sprint-3 candidates
-- Pushed to origin/main
+- Team portage-sprint-2: 16 commits, 148/148 tests, lead-stub interface pattern
+- F-Integ + F-Q1 discovered; pushed to origin/main
 
 ## Session 4 - Sprint 3: F-005 + F-Integ + F-Q1 (2026-04-25 → 2026-04-26)
-- Team: portage-sprint-3 (3 implementers + 1 Opus reviewer + 2-way fix wave)
-- 24 commits on main (5 new since Sprint 2 push), 177/177 tests, tsc CLEAN, coverage 95%+ everywhere
-  - liked.ts 100% stmts; tracks.ts 100/100/100/100; sync_state.ts 100/100/100/100
-- Sprint 3 review verdict: SHIP-WITH-FOLLOW-UPS (1 critical broken-build + 1 major spec gap + 1 schema drift, all fixed)
-- F-005 fix wave addressed: C1 (db.transaction shape mismatch — refactored to array-of-promises form), M1 (replaced raw fetch with spotifyFetch from F-002 for 401-refresh), M3 (added idx_tracks_added_at + amended F-005 spec for nullability)
-- F-Q1 fix: hex decoder for Tidal state entropy (was misreporting 384 bits, now correctly 256)
-- **Harness improvements landed (lead-side, sprint-3 D2+D5)**:
-  - .harness/init.sh: capture tsc + npm test exit codes via PIPESTATUS (was masking failures via `| tail`)
-  - .claude/hooks/verify-task-quality.sh: Stage 3 — parses features.json coverage field, rejects forbidden "TOOLING BLOCKER"/"tooling unreliable"/"0/N statements" phrases. Mechanical enforcement of the 3rd-strike Meta-Pattern.
-- Live Neon DDL: `CREATE INDEX IF NOT EXISTS idx_tracks_added_at` applied via Neon MCP (teammate didn't have permission)
+- Team portage-sprint-3: 24 commits, 177/177 tests
+- Sprint 3 review: BLOCK-AND-FIX → fixed (C1 broken build, M1 spec gap, M3 schema drift)
+- **Harness improvements** (lead-side D2+D5): init.sh PIPESTATUS exit propagation; verify-task-quality.sh Stage 3 (rejects forbidden coverage phrases)
+- Pushed to origin/main
 
-## Next Session — Sprint 4 plan
-1. **F-006 (ISRC matching)** — single teammate, ~2-3 hours. Depends on F-003 (Tidal OAuth) + F-005 (tracks). Both green.
-2. **F-007 (fuzzy matching fallback)** — can spawn alongside F-006 once it lands (F-007 depends on F-006). Single teammate.
-3. **F-008 (Tidal playlist write)** — depends on F-003, F-006, F-007. Single teammate, ships after Sprint 4 matching wave.
-4. **Optional**: extend F-Integ with a tests/integration/liked-fetch.test.ts that exercises F-005's persist path against real Neon (Sprint 3 review M4 — strengthens the integration suite for the matching features).
-5. **Pre-Sprint-4**: push the 5 Sprint 3 commits to origin (Ovidiu's call on timing).
+## Session 5 - Sprint 4: F-006 + F-007 + F-008 (2026-04-26)
+- Team portage-sprint-4: 30 commits, 324/324 tests, tsc clean
+- Single implementer (match-isrc) handled all 3 features sequentially via SendMessage reuse — no fresh-spawn cost
+- Sprint 4 review verdict: SHIP-WITH-FOLLOW-UPS (1 critical schema drift + 1 major audit-marker gap + 2 minor)
+- Sprint 4 fix wave (30 min):
+  - C1: tidal_id_invalid added to db/schema.sql; live Neon ALTER applied by lead via Neon MCP
+  - M1: TODO(ovidiu) markers on 2 Tidal URL constants + lifted "private" to PLAYLIST_PRIVACY constant
+  - m6: description literal asserted in playlist test
+  - m8: error-count underflow on partial-last-batch + 429 abort fixed (+ test)
+- ZERO correction cycles across F-006/F-007/F-008 implementation — Sprint 3 hook investment paying compounding dividends
+- Live Neon DDL applied via MCP this session: `idx_matches_tidal` (F-006), `tidal_id_invalid BOOLEAN` (F-008)
+
+## Next Session — Sprint 5 plan
+1. **F-011 (sync logging)** FIRST — single teammate, depends only on F-001 (auth middleware). ~2-3 hours. Read endpoints (GET /sync/status, /sync/runs, /stats) + sync_runs row CRUD. Wave A.
+2. **F-009 (sync orchestration)** — depends on F-005, F-006, F-007, F-008, F-011. Use the lead-stub interface pattern from Sprint 2: pre-commit a stub for the F-009 orchestrator interface so F-011 can be tested against it; F-009 fills in the body. Wave A in parallel with F-011.
+3. **F-010 (cron)** — single small teammate after F-009 lands. Wraps the Cloudflare Workers cron trigger; calls F-009 orchestrator. Trivial. Wave B.
+4. **F-012 (unmatched queue)** + **F-013 (captures API)** — both depend on F-001 + F-009. Can run in parallel after F-009 lands. Wave C.
+5. **Pre-Sprint-5**: push the 6 Sprint 4 commits to origin (Ovidiu's call on timing).
+
+## Sprint 5 harness improvements (carry over from Sprint 4 review D5)
+- Add Stage 4 to TaskCompleted hook: grep src/ for new column references not in db/schema.sql, reject completion. Same playbook as Sprint 3's coverage-claim gate. ~30 LOC bash. Mechanical enforcement of the schema-migration discipline anti-pattern.
+- Add Stage 5 (optional): grep src/ for new `openapi.tidal.com` / `api.spotify.com` URL constants requiring an immediately-preceding `TODO(ovidiu)` marker. Mechanically enforces the audit-marker discipline.
 
 ## Outstanding/deferred (tracked, not done)
-- Tidal scope verification (Ovidiu owns) — confirm `playlists.read playlists.write user.read collection.read collection.write search.read` against Tidal Developer Portal app config before any production OAuth handshake. TODO is in src/providers/tidal/scopes.ts.
-- T-004-13 plaintext-token log canary — vacuous in Sprints 1-3 (no code emits log lines for tokens); revisit when sync paths log real run data
-- Wrangler upgrade (compat-date currently pinned to 2024-12-30 for local-runtime compat) — bump when Cloudflare ships wrangler with newer bundled runtime
-- Live Neon `\d` verification of all tables (Sprint 2+3 D5 — soft, db/schema.sql comment is sufficient evidence; oauth_state + idx_tracks_added_at confirmed live via Neon MCP this session)
-- Worktree-isolation harness bug (Sprint 2 D6, Sprint 3 D6) — `isolation: "worktree"` flag is silently a no-op; file separately and drop the flag from spawn prompts
-- Liked.ts uncovered branches (lines 57, 89-92) — null-coalescing for absent Spotify upstream fields and Retry-After defaults; documented; not addressable without live API
+- T-006-13 + T-006-14 (curated 20-track + corrupted ISRC tests, live Tidal API) — F-Q2 candidate (Sprint 5+)
+- T-007-15 (curated 20-track precision, live Tidal) — F-Q2 candidate
+- F-Integ extension for F-005 + F-008 paths — Sprint 5+ (closes Sprint 3 D5 + Sprint 4 D3, prevents future schema/code drift bugs)
+- T-004-13 plaintext-token log canary — vacuous so far (no token data logged); revisit when sync paths run real data
+- Tidal scope verification (Ovidiu owns; src/providers/tidal/scopes.ts has TODO)
+- 4 new Tidal URL constants now have TODO(ovidiu) markers (M1 from Sprint 4 review): F-006 ISRC search, F-007 fuzzy search (already verified by F-007 teammate), F-008 playlist CRUD, F-008 PLAYLIST_PRIVACY value
+- Wrangler upgrade (compat-date pinned to 2024-12-30)
+- D4 (Sprint 4 review): F-007 fuzzy search query normalises artist via title-normalisation helper — consider spec amendment or code change
+- Worktree-isolation harness bug (Sprints 2+3+4): `isolation: "worktree"` is silently a no-op; file separately
