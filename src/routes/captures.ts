@@ -112,6 +112,7 @@ capturesRoute.post("/captures", async (c) => {
   try {
     await ensureTrackExists(c.env, spotifyId);
   } catch (err) {
+    /* istanbul ignore next — non-Error throws from ensureTrackExists are not possible; all throw paths use `new Error(...)` */
     const msg = err instanceof Error ? err.message : "";
     if (msg === "spotify_track_not_found") {
       return c.json({ error: "spotify_track_not_found" }, 400);

@@ -605,6 +605,74 @@ describe("T-013: POST /captures — findRecentCapture DB error returns 503", () 
   });
 });
 
+// GET /captures — limit=0 uses default (rawLimit < 1 branch, line 27)
+describe("T-013: GET /captures — limit=0 falls back to default", () => {
+  it("uses default limit when limit=0 is passed", async () => {
+    mockListCaptures.mockResolvedValueOnce([]);
+
+    const res = await doFetch("/captures?limit=0");
+    expect(res.status).toBe(200);
+    expect(mockListCaptures).toHaveBeenCalledWith(
+      expect.anything(),
+      50, // DEFAULT_LIMIT
+      undefined,
+      undefined,
+    );
+  });
+
+  it("uses default limit when limit=-1 is passed", async () => {
+    mockListCaptures.mockResolvedValueOnce([]);
+
+    const res = await doFetch("/captures?limit=-1");
+    expect(res.status).toBe(200);
+    expect(mockListCaptures).toHaveBeenCalledWith(
+      expect.anything(),
+      50,
+      undefined,
+      undefined,
+    );
+  });
+});
+
+// T-013-09: Spotify fetch with missing optional fields (covers lines 202-206)
+describe("T-013-09: ensureTrackExists — Spotify response with missing optional fields", () => {
+  it("handles missing external_ids, artists[0], album, duration_ms gracefully", async () => {
+    mockSql.mockResolvedValueOnce([]); // track not in DB
+    // Spotify response with all optional fields absent
+    const sparseTrack = {
+      id: VALID_SPOTIFY_ID,
+      name: "Sparse Track",
+      artists: [],          // no artists → artists[0]?.name = undefined
+      album: { name: null }, // null album name → album?.name = null
+      duration_ms: null,    // null duration
+      // external_ids absent → external_ids?.isrc = undefined
+    };
+    mockSpotifyFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify(sparseTrack), { status: 200 }),
+    );
+    mockUpsertTracks.mockResolvedValueOnce(1);
+    mockFindRecentCapture.mockResolvedValueOnce(null);
+    mockInsertCapture.mockResolvedValueOnce(makeCapture());
+
+    const res = await doFetch("/captures", {
+      method: "POST",
+      body: { spotify_id: VALID_SPOTIFY_ID, source: "siri" },
+    });
+    expect(res.status).toBe(201);
+    expect(mockUpsertTracks).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.arrayContaining([
+        expect.objectContaining({
+          isrc: null,
+          artist: "",
+          album: null,
+          duration_ms: null,
+        }),
+      ]),
+    );
+  });
+});
+
 // Valid boundary: lat=90 and lng=180 are accepted
 describe("T-013: boundary coordinates accepted", () => {
   it("accepts lat=90, lng=180 (boundary)", async () => {
