@@ -98,12 +98,25 @@ case "$STACK" in
         if [ -f "tsconfig.json" ]; then
             echo ""
             echo "--- TypeScript Check ---"
-            npx tsc --noEmit 2>&1 | tail -10
+            # Capture tsc exit code via PIPESTATUS — `| tail` would otherwise mask it
+            npx tsc --noEmit 2>&1 | tail -20
+            TSC_EXIT=${PIPESTATUS[0]}
+            if [ "$TSC_EXIT" -ne 0 ]; then
+                echo ""
+                echo "TypeScript check failed (exit $TSC_EXIT)."
+                exit "$TSC_EXIT"
+            fi
         fi
         if [ "$TARGET" = "full_test" ]; then
             echo ""
             echo "--- Tests ---"
             npm test 2>&1 | tail -20
+            TEST_EXIT=${PIPESTATUS[0]}
+            if [ "$TEST_EXIT" -ne 0 ]; then
+                echo ""
+                echo "Tests failed (exit $TEST_EXIT)."
+                exit "$TEST_EXIT"
+            fi
         fi
         ;;
     python)

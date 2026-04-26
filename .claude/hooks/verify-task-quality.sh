@@ -88,6 +88,53 @@ FULL_OUTPUT=$(bash .harness/init.sh full_test 2>&1) || {
     exit 2
 }
 
+# Stage 3: Coverage-claim sanity check (D2 from sprint-3 review).
+# Rejects "TOOLING BLOCKER" / "tooling unreliable" / "0/N statements" / "n/a — tooling"
+# patterns that have wrongly hidden real coverage gaps in 3 prior sprints
+# (F-014 S1, F-002 S2, F-005 S3). Pure mechanical guard — no judgment, no exception.
+if [ -f ".harness/features.json" ] && [ -n "$FEATURE_ID" ]; then
+    REJECT_REASON=$(python3 - "$FEATURE_ID" <<'PYEOF'
+import json, sys
+target_id = sys.argv[1]
+forbidden = [
+    "TOOLING BLOCKER",
+    "tooling unreliable",
+    "tooling broken",
+    "0/N statements",
+    "0/N stmts",
+]
+try:
+    with open('.harness/features.json', 'r') as f:
+        data = json.load(f)
+    for feature in data.get('features', []):
+        if feature.get('id') == target_id:
+            cov = feature.get('coverage')
+            if cov is None:
+                print(f"feature '{target_id}' has coverage=null; populate with literal istanbul output")
+            elif isinstance(cov, str):
+                low = cov.lower()
+                for phrase in forbidden:
+                    if phrase.lower() in low:
+                        print(f"feature '{target_id}' coverage contains forbidden phrase: {phrase!r}")
+                        break
+            break
+except Exception as e:
+    pass  # don't fail the hook on JSON errors
+PYEOF
+)
+    if [ -n "$REJECT_REASON" ]; then
+        echo "Task rejected: coverage claim sanity check failed."
+        echo ""
+        echo "$REJECT_REASON"
+        echo ""
+        echo "This is the third sprint where a 'tooling unreliable' claim hid a real coverage gap (F-014 S1, F-002 S2, F-005 S3)."
+        echo "Run \`npm run test:coverage\` and paste the literal istanbul output into features.json."
+        echo "If coverage is genuinely unmeasurable for a specific provider, cite the exact error message — not a vague 'tooling broken'."
+        increment_correction_cycles
+        exit 2
+    fi
+fi
+
 # Remind about stale in-progress features
 if [ -f ".harness/features.json" ]; then
     IN_PROGRESS=$(python3 -c "
