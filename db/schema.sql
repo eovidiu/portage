@@ -55,13 +55,16 @@ CREATE TABLE IF NOT EXISTS sync_runs (
 -- Confirmed Spotify→Tidal pairings.
 -- A spotify_id present here MUST NOT appear in unmatched (I-001).
 CREATE TABLE IF NOT EXISTS matches (
-    spotify_id  TEXT PRIMARY KEY REFERENCES tracks(spotify_id),
-    tidal_id    TEXT NOT NULL,
-    method      TEXT NOT NULL CHECK (method IN ('isrc','fuzzy','manual')),
-    confidence  NUMERIC(3,2),
-    matched_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    sync_run_id UUID REFERENCES sync_runs(run_id)
+    spotify_id       TEXT PRIMARY KEY REFERENCES tracks(spotify_id),
+    tidal_id         TEXT NOT NULL,
+    method           TEXT NOT NULL CHECK (method IN ('isrc','fuzzy','manual')),
+    confidence       NUMERIC(3,2),
+    matched_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    sync_run_id      UUID REFERENCES sync_runs(run_id),
+    tidal_id_invalid BOOLEAN NOT NULL DEFAULT false
 );
+-- Added by F-008: marks rows where the Tidal track no longer exists in catalog.
+ALTER TABLE matches ADD COLUMN IF NOT EXISTS tidal_id_invalid BOOLEAN NOT NULL DEFAULT false;
 
 -- Tracks that could not be matched; pending manual review or retry.
 -- A spotify_id present here MUST NOT appear in matches (I-001).

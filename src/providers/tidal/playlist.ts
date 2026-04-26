@@ -2,6 +2,7 @@ import type { Env } from "../../env";
 import { tidalFetch } from "./client";
 import {
   BATCH_SIZE,
+  PLAYLIST_PRIVACY,
   TIDAL_PLAYLISTS_URL,
   playlistUrl,
   playlistTracksUrl,
@@ -33,7 +34,7 @@ export async function createPlaylist(env: Env, title: string): Promise<string> {
       attributes: {
         title,
         description: PLAYLIST_DESCRIPTION,
-        privacy: "private",
+        privacy: PLAYLIST_PRIVACY,
       },
     },
   });
@@ -134,8 +135,8 @@ export async function addTracksToPlaylist(
     invalidIds.push(...result.invalidIds);
     errors += result.errors;
     if (result.aborted) {
-      // 429 after retry: count remaining tracks as errors
-      errors += trackIds.length - i - BATCH_SIZE;
+      // 429 after retry: count remaining tracks as errors (Math.max guards partial last batch)
+      errors += Math.max(0, trackIds.length - i - BATCH_SIZE);
       break;
     }
   }
