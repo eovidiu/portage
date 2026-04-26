@@ -75,13 +75,13 @@ The fetch module retrieves new Spotify Liked Songs since the last successful run
 ```sql
 CREATE TABLE tracks (
   spotify_id TEXT PRIMARY KEY,
-  isrc TEXT,
+  isrc TEXT,                          -- NULL when Spotify omits external_ids (R2)
   artist TEXT NOT NULL,
   title TEXT NOT NULL,
-  album TEXT NOT NULL,
-  duration_ms INTEGER NOT NULL,
+  album TEXT,                         -- NULLABLE: Spotify omits album on unusual content
+  duration_ms INTEGER,                -- NULLABLE: Spotify omits duration_ms on unusual content
   spotify_added_at TIMESTAMPTZ NOT NULL,
-  first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  first_seen_at TIMESTAMPTZ DEFAULT now()  -- NULLABLE: set by DB default on insert
 );
 
 CREATE INDEX idx_tracks_isrc ON tracks(isrc) WHERE isrc IS NOT NULL;
@@ -90,7 +90,7 @@ CREATE INDEX idx_tracks_added_at ON tracks(spotify_added_at DESC);
 CREATE TABLE sync_state (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at TIMESTAMPTZ DEFAULT now()  -- NULLABLE: set by DB default on write
 );
 ```
 

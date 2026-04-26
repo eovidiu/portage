@@ -1,4 +1,4 @@
-import { neon } from "@neondatabase/serverless";
+import { neon, type NeonQueryFunctionInTransaction } from "@neondatabase/serverless";
 import type { Env } from "../env";
 
 const COLD_START_CURSOR = "1970-01-01T00:00:00Z";
@@ -9,16 +9,17 @@ export async function readCursor(env: Env, key: string): Promise<string> {
     `SELECT value FROM sync_state WHERE key = $1`,
     [key],
   );
-  if (rows.length === 0) return COLD_START_CURSOR;
-  return rows[0].value as string;
+  if ((rows as Record<string, unknown>[]).length === 0) return COLD_START_CURSOR;
+  return (rows as Record<string, unknown>[])[0].value as string;
 }
 
-export async function writeCursor(
-  sql: ReturnType<typeof neon>,
+// Builds an un-awaited cursor upsert query for use inside a db.transaction() sync callback.
+export function buildCursorQuery(
+  txSql: NeonQueryFunctionInTransaction<false, false>,
   key: string,
   value: string,
-): Promise<void> {
-  await sql(
+) {
+  return txSql(
     `INSERT INTO sync_state (key, value, updated_at)
      VALUES ($1, $2, now())
      ON CONFLICT (key) DO UPDATE SET
