@@ -35,3 +35,24 @@ export async function getUnmatchedCount(
   );
   return (rows as { n: number }[])[0]?.n ?? 0;
 }
+
+/**
+ * Re-queue a spotify_id as unmatched because its Tidal match is no longer valid.
+ * Unlike upsertUnmatched, this bypasses the status='pending' guard so that
+ * previously matched/skipped rows can be re-queued.
+ */
+export async function requeueForInvalidTidalId(
+  sql: NeonQueryFunction<false, false>,
+  spotifyId: string,
+): Promise<void> {
+  await sql(
+    `INSERT INTO unmatched (spotify_id, reason, attempts, last_attempt_at, status)
+     VALUES ($1, 'tidal_track_removed', 1, now(), 'pending')
+     ON CONFLICT (spotify_id) DO UPDATE
+       SET reason          = 'tidal_track_removed',
+           attempts        = unmatched.attempts + 1,
+           last_attempt_at = now(),
+           status          = 'pending'`,
+    [spotifyId],
+  );
+}

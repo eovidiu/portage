@@ -34,3 +34,39 @@ export async function findMatchedIds(
   return new Set((rows as { spotify_id: string }[]).map((r) => r.spotify_id));
 }
 
+export interface MatchForPlaylist {
+  spotify_id: string;
+  tidal_id: string;
+  matched_at: string;
+}
+
+/**
+ * Returns matches with matched_at > sinceIso, ordered ascending by matched_at.
+ * Used by the playlist writer to find tracks to append.
+ */
+export async function selectMatchesNewerThan(
+  sql: NeonQueryFunction<false, false>,
+  sinceIso: string,
+): Promise<MatchForPlaylist[]> {
+  const rows = await sql(
+    `SELECT spotify_id, tidal_id, matched_at::text AS matched_at
+     FROM matches
+     WHERE matched_at > $1::timestamptz
+       AND tidal_id_invalid = false
+     ORDER BY matched_at ASC`,
+    [sinceIso],
+  );
+  return rows as MatchForPlaylist[];
+}
+
+/** Mark a match row as invalid (the Tidal track no longer exists). */
+export async function flagInvalidTidalId(
+  sql: NeonQueryFunction<false, false>,
+  tidalId: string,
+): Promise<void> {
+  await sql(
+    `UPDATE matches SET tidal_id_invalid = true WHERE tidal_id = $1`,
+    [tidalId],
+  );
+}
+
