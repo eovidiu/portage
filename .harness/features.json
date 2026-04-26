@@ -2,7 +2,7 @@
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
   "total_features": 17,
-  "passing": 9,
+  "passing": 10,
   "features": [
     {
       "id": "F014",
@@ -309,25 +309,33 @@
       "id": "F007",
       "spec": "docs/specs/F-007-fuzzy-matching.md",
       "test_spec": "docs/specs/T-007-fuzzy-matching.md",
-      "description": "Fuzzy track matching fallback (artist + title + duration)",
+      "description": "Fuzzy track matching fallback (artist + title + duration + album scoring)",
       "priority": 6,
-      "status": "pending",
+      "status": "passing",
       "scope": [
         "src/match/fuzzy.ts",
+        "src/match/title.ts",
+        "src/match/score.ts",
+        "src/match/index.ts",
         "src/db/unmatched.ts",
-        "tests/match/fuzzy.test.ts"
+        "tests/match/fuzzy.test.ts",
+        "tests/match/title.test.ts",
+        "tests/match/score.test.ts",
+        "tests/db/unmatched.test.ts"
       ],
       "depends_on": [
         "F003",
         "F006"
       ],
       "assigned_to": null,
-      "test_file": null,
-      "coverage": null,
-      "notes": "Only triggered after F-006 ISRC miss. Misses go to unmatched queue (consumed by F-012).",
+      "test_file": "tests/match/fuzzy.test.ts",
+      "coverage": "src/match/fuzzy.ts: 100% stmts/branches/functions/lines; src/match/title.ts: 100%; src/match/score.ts: 100%; src/db/unmatched.ts: 100% (all istanbul)",
+      "notes": "Only triggered after F-006 ISRC miss. Misses go to unmatched queue (consumed by F-012). Deferred: T-007-15 (curated 20-track precision, requires live Tidal API or recorded fixtures). tokenSortRatio reused from artist.ts (F-006). 429 handled inline in fuzzy.ts per Meta-Pattern M1.",
       "correction_cycles": 0,
       "scope_expansions": [],
-      "approaches_tried": [],
+      "approaches_tried": [
+        "Weighted scoring 0.40/0.30/0.20/0.10 with tokenSortRatio from artist.ts; normaliseTitle/normaliseAlbum for remaster/feat. strip; upsertUnmatched with ON CONFLICT ... WHERE status='pending' to protect manually-resolved rows"
+      ],
       "failure_reason": null,
       "discovered_via": null
     },
