@@ -2,9 +2,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { Env } from "../../src/env";
 
 // All upstream modules are mocked so F-009 never touches real DB or providers.
+// The orchestrator uses BOTH the HTTP driver (`neon()`) for stateless queries
+// and the WebSocket driver (`Pool`) for the session-scoped advisory lock pair.
+// We mock both surfaces. mockSql controls the HTTP path (fetchNewTracks);
+// mockClient.query controls the lock pair (pg_try_advisory_lock + pg_advisory_unlock).
 const mockSql = vi.fn();
+const mockClient = {
+  query: vi.fn(),
+  release: vi.fn(),
+};
+const mockPool = {
+  connect: vi.fn(),
+  end: vi.fn(),
+};
 vi.mock("@neondatabase/serverless", () => ({
   neon: () => mockSql,
+  Pool: vi.fn().mockImplementation(() => mockPool),
 }));
 
 vi.mock("../../src/db/sync_runs", () => ({
@@ -30,11 +43,14 @@ vi.mock("../../src/sync/playlist-writer", () => ({
 }));
 
 import { runSync } from "../../src/sync/orchestrator";
+import { Pool } from "@neondatabase/serverless";
 import { insertRun, updateRun, markAbandonedRuns } from "../../src/db/sync_runs";
 import { fetchLikedSongs } from "../../src/providers/spotify/liked";
 import { matchByIsrc } from "../../src/match/isrc";
 import { matchByFuzzy } from "../../src/match/fuzzy";
 import { writePlaylist } from "../../src/sync/playlist-writer";
+
+const PoolCtor = Pool as unknown as ReturnType<typeof vi.fn>;
 
 const mockInsertRun = insertRun as ReturnType<typeof vi.fn>;
 const mockUpdateRun = updateRun as ReturnType<typeof vi.fn>;
@@ -60,15 +76,14 @@ function makeEnv(): Env {
   };
 }
 
-// Set up mockSql for a standard successful lock/fetchTracks/unlock sequence.
-// pg_try_advisory_lock → acquired:true
-// fetchNewTracks (SELECT from tracks) → []
-// pg_advisory_unlock → [] (default fallback for any extra calls)
+// Set up the lock + HTTP-query sequence for a standard successful run.
+// mockClient.query handles the WS-session lock pair (acquire + unlock).
+// mockSql handles the HTTP-driver queries (fetchNewTracks).
 function setupSqlSuccess() {
-  mockSql
-    .mockResolvedValueOnce([{ acquired: true }])
-    .mockResolvedValueOnce([])
-    .mockResolvedValue([]); // default for unlock + any extra queries
+  mockClient.query
+    .mockResolvedValueOnce({ rows: [{ acquired: true }] }) // pg_try_advisory_lock
+    .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] }); // pg_advisory_unlock
+  mockSql.mockResolvedValueOnce([]); // fetchNewTracks
 }
 
 // Set up provider/db mocks for a successful run with optional overrides.
@@ -109,6 +124,11 @@ function setupProviders(overrides: {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // resetAllMocks clears every mock's implementation, including the Pool
+  // constructor inside the vi.mock factory. Re-establish baseline behaviours.
+  PoolCtor.mockImplementation(() => mockPool);
+  mockPool.connect.mockResolvedValue(mockClient);
+  mockPool.end.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -248,7 +268,7 @@ describe("T-009-05: F-005 hard failure marks run failed", () => {
 describe("T-009-06: Concurrent invocation skipped", () => {
   it("returns skipped_locked with no sync_runs row when lock is busy", async () => {
     mockMarkAbandoned.mockResolvedValue(0);
-    mockSql.mockResolvedValue([{ acquired: false }]); // use mockResolvedValue not Once
+    mockClient.query.mockResolvedValueOnce({ rows: [{ acquired: false }] });
 
     const logSpy = vi.spyOn(console, "log");
 
@@ -259,6 +279,9 @@ describe("T-009-06: Concurrent invocation skipped", () => {
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining("sync_skipped_locked"),
     );
+    // Pool resources released even when lock not acquired
+    expect(mockClient.release).toHaveBeenCalled();
+    expect(mockPool.end).toHaveBeenCalled();
   });
 });
 
@@ -266,35 +289,50 @@ describe("T-009-06: Concurrent invocation skipped", () => {
 // T-009-07: Lock released after success
 // ---------------------------------------------------------------------------
 describe("T-009-07: Lock is released after success", () => {
-  it("calls pg_advisory_unlock after successful run", async () => {
+  it("calls pg_advisory_unlock and tears down Pool after successful run", async () => {
     setupSqlSuccess();
     setupProviders();
 
     await runSync(makeEnv());
 
-    // The unlock call uses neon() → mockSql with a query containing pg_advisory_unlock
-    const unlockCall = mockSql.mock.calls.find((call) =>
+    const unlockCall = mockClient.query.mock.calls.find((call) =>
       typeof call[0] === "string" && call[0].includes("pg_advisory_unlock"),
     );
     expect(unlockCall).toBeDefined();
+    expect(mockClient.release).toHaveBeenCalled();
+    expect(mockPool.end).toHaveBeenCalled();
   });
 });
 
 // ---------------------------------------------------------------------------
 // T-009-08: Lock released after exception
 // ---------------------------------------------------------------------------
+describe("T-009-07b: Pool resources released when lock acquire query throws", () => {
+  it("releases client and ends pool when pg_try_advisory_lock query itself rejects", async () => {
+    mockMarkAbandoned.mockResolvedValue(0);
+    mockClient.query.mockRejectedValueOnce(new Error("connection lost"));
+
+    await expect(runSync(makeEnv())).rejects.toThrow("connection lost");
+    expect(mockClient.release).toHaveBeenCalled();
+    expect(mockPool.end).toHaveBeenCalled();
+    expect(mockInsertRun).not.toHaveBeenCalled();
+  });
+});
+
 describe("T-009-08: Lock is released after exception", () => {
-  it("calls pg_advisory_unlock even when matchByIsrc throws", async () => {
+  it("calls pg_advisory_unlock and tears down Pool even when matchByIsrc throws", async () => {
     setupSqlSuccess();
     setupProviders();
     mockMatchByIsrc.mockRejectedValue(new Error("unexpected network failure"));
 
     await runSync(makeEnv());
 
-    const unlockCall = mockSql.mock.calls.find((call) =>
+    const unlockCall = mockClient.query.mock.calls.find((call) =>
       typeof call[0] === "string" && call[0].includes("pg_advisory_unlock"),
     );
     expect(unlockCall).toBeDefined();
+    expect(mockClient.release).toHaveBeenCalled();
+    expect(mockPool.end).toHaveBeenCalled();
   });
 });
 
@@ -310,7 +348,7 @@ describe("T-009-09: Abandoned run cleaned up", () => {
       return Promise.resolve(1);
     });
     // Return lock-not-acquired so we don't need to set up the whole run
-    mockSql.mockResolvedValue([{ acquired: false }]);
+    mockClient.query.mockResolvedValueOnce({ rows: [{ acquired: false }] });
 
     await runSync(makeEnv());
 
@@ -333,8 +371,9 @@ describe("T-009-11: Wall-time cap reflected in run status", () => {
     mockFetchLikedSongs.mockImplementation(
       () => new Promise<never>(() => { /* intentionally hangs */ }),
     );
-    // mockSql: lock acquired for all calls (unlock in finally also uses mockSql)
-    mockSql.mockResolvedValue([{ acquired: true, pg_advisory_unlock: true }]);
+    // Lock pair on Pool/client; HTTP-driver query (fetchNewTracks) on mockSql.
+    mockClient.query.mockResolvedValue({ rows: [{ acquired: true, pg_advisory_unlock: true }] });
+    mockSql.mockResolvedValue([]);
 
     vi.useFakeTimers();
 
@@ -366,8 +405,8 @@ describe("T-009-08b: fuzzy match exception handled gracefully", () => {
     // Should be partial (errors > 0 from fuzzy fatal)
     expect(result.outcome).toBe("partial");
     expect(result.errors).toBeGreaterThanOrEqual(1);
-    // unlock still called
-    const unlockCall = mockSql.mock.calls.find((call) =>
+    // unlock still called via the WS client
+    const unlockCall = mockClient.query.mock.calls.find((call) =>
       typeof call[0] === "string" && call[0].includes("pg_advisory_unlock"),
     );
     expect(unlockCall).toBeDefined();
