@@ -31,17 +31,26 @@
 - ZERO correction cycles across F-006/F-007/F-008 implementation — Sprint 3 hook investment paying compounding dividends
 - Live Neon DDL applied via MCP this session: `idx_matches_tidal` (F-006), `tidal_id_invalid BOOLEAN` (F-008)
 
-## Session 6 - Sprint 5 Wave A: F-011 + F-009 (2026-04-26)
-- Team portage-sprint-5: 3 commits this session (34f28c0 Stage 4 hook, 3732cce feat F-011 [bundled F-009 work too], 7012a39 fix F-009 lock); 381/381 tests; tsc clean
-- F-011 (logging) shipped clean, 0 correction cycles. Coverage 100% on routes; 98.48% on sync_runs.ts (one logically-unreachable branch in toSig4).
-- F-009 (orchestrator) had a coordination failure: teammate received plan_approval revision (advisory lock must use Pool/WebSocket) but proceeded with the broken bare-neon() approach anyway. Lead applied the fix directly (~30 LOC src + ~30 LOC test); F-009 coverage now 100% across the board. correction_cycles=1 reflects the lead-applied fix.
-- Live Neon migration applied via MCP: `error_code TEXT` column on `sync_runs`.
-- Stage 4 schema-drift hook landed and validated. Catches simulated Sprint-4 regression; clean on current code. Pending: Stage 5 TODO-marker hook (push to Sprint 6).
+## Session 6 - Sprint 5 (Wave A + Wave B + Wave C, 2026-04-26)
+- Team portage-sprint-5: 11 commits this session (34f28c0 Stage 4 hook, 3732cce F-011 [bundled F-009], 7012a39 fix F-009 lock, 681c6fe Wave A close-out, 1b9e681 F-010 base, 9630a30 F-012, 5d38dae F-010 R7 race, e57c5cf F-013 base, 9705b4b F-013 DB tests, d8a90b1 F-013 line-116 branch); 462/462 tests; tsc clean
+- All 17/17 features now passing. Sprint 5 fully complete.
+- Wave A: F-011 (logging) shipped clean, 0 correction cycles, coverage 100% on routes / 98.48% on sync_runs.ts. F-009 (orchestrator) had a coordination failure — teammate proceeded with broken bare-neon() lock despite plan_approval revision; lead applied Pool/WebSocket fix in 7012a39.
+- Wave B: F-010 (cron) shipped base in 1b9e681, R7 follow-up in 5d38dae after lead requested the manual-endpoint 25s race + spec body shapes. cron correctly self-flagged the run.ts gap.
+- Wave C: F-012 (unmatched queue) shipped clean in 9630a30 — 21 tests, 100% route coverage, defensive Tidal verify before manual-match transaction. F-013 (captures) shipped base in e57c5cf; lead requested DB layer test follow-up (route mocked DB to 0%) and route branch coverage; teammate landed DB tests in 9705b4b; lead added one extra branch test in d8a90b1.
+- Live Neon migrations applied via MCP: `error_code TEXT` column on `sync_runs`; `idx_captures_spotify_id` on `captures`.
+- Stage 4 schema-drift hook landed and validated. Catches simulated Sprint-4 regression; clean on all current code.
+- Coordination failures: 2 of the same shape (lead sends instructions, teammate doesn't surface what they did via SendMessage). Wave A's was active non-compliance (orchestrator shipped broken lock); Wave B+C's was silent compliance (captures did the work but didn't ack). Both noted as Sprint 6 carry-overs.
 
-## Next Session — Sprint 5 Wave B + Wave C
-1. **F-010 (cron)** — Wave B. Single small teammate. Wraps Cloudflare Workers cron trigger; calls F-009 orchestrator's `runSync(env)`. Trivial scope (src/scheduled.ts + wrangler.toml cron section). Should ship clean given the orchestrator interface is now stable.
-2. **F-012 (unmatched queue)** + **F-013 (captures API)** — Wave C, both depend on F-001 + F-009. Can run in parallel after F-010 (or alongside it, since they don't share scope). Both are HTTP CRUD endpoints over existing tables.
-3. **Pre-Sprint-6**: push the unpushed commits to origin (Ovidiu's call on timing).
+## Next Session — Sprint 6 plan
+1. **Push to origin** (Ovidiu's call on timing). Currently 6 unpushed commits since the Wave A close-out push.
+2. **Project-level review pass**: with all 17 features passing, run a project-level reviewer (Opus) over the full src/ tree before declaring shippable. This is the equivalent of Sprint 4's review wave but at sprint-of-sprints scope. Look for: cross-feature consistency (HTTP error shapes, log line conventions, DB transaction patterns), security (PII in logs, token handling), spec coverage matrix completeness, anything that snuck through the per-feature reviews.
+3. **F-Q1 enrichment**: T-009-10 wall-time metric + T-011-13 p95-with-1000-rows are deferred e2e tests. Add them to the F-Q1 e2e harness (already wired up against wrangler dev) for full mechanical spec coverage.
+4. **F-Integ extension**: add F-005 + F-008 + F-009 paths to the integration test (already exists against Neon branch); closes Sprint 3 D5, Sprint 4 D3, Sprint 5 lock-driver gotcha.
+5. **Sprint 6 harness improvements**:
+   - Plan-approval compliance enforcement (file-flag PreToolUse hook, OR explicit ack convention "starting work: <plan summary>" required before edits, OR teammate must echo lead's revisions in their first commit message).
+   - Pre-commit lead-stub for shared mount points (src/index.ts) when 2+ teammates run in parallel — prevents the recurring bundled-commit issue. Same pattern as Sprint 2's stub for sync_runs.ts (commit 9cee614).
+   - Stage 5 TODO-marker hook (still pending from Sprint 4).
+   - Index-migration scrutiny in Stage 4 (Wave C surfaced this — captures' missing index in spec).
 
 ## Sprint 6 harness improvements (carry over from Sprint 5 retrospective)
 - **Plan approval compliance enforcement**: spawn prompts already require waiting for approval, but the F-009 teammate proceeded anyway. Options: (a) `.harness/teammate-<name>-approved.flag` file gate via PreToolUse hook on Write/Edit until the lead writes the flag, (b) clearer "if in doubt, ask" instruction in spawn template, (c) require the teammate to echo back the lead's revisions in their first commit message.
