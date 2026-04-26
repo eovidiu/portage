@@ -10,6 +10,7 @@ import syncRunsRoute from "./routes/sync/runs";
 import syncRunRoute from "./routes/sync/run";
 import statsRoute from "./routes/stats";
 import capturesRoute from "./routes/captures";
+import unmatchedRoute from "./routes/unmatched";
 import { scheduled } from "./scheduled";
 
 const AUTH_SKIP_PATHS = ["/healthz", "/readyz", "/auth/spotify/callback", "/auth/tidal/callback"];
@@ -28,6 +29,7 @@ app.route("/sync", syncRunsRoute);
 app.route("/sync", syncRunRoute);
 app.route("/", statsRoute);
 app.route("/", capturesRoute);
+app.route("/unmatched", unmatchedRoute);
 
 export default {
   fetch: app.fetch,
