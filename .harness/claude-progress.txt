@@ -91,7 +91,29 @@ Suggested Sprint 7 team structure:
 - F-Integ extension for F-005 + F-008 + F-009 paths — Sprint 6+ (closes Sprint 3 D5 + Sprint 4 D3 + Sprint 5 lock-driver semantics, prevents future schema/code drift bugs)
 - T-004-13 plaintext-token log canary — vacuous so far (no token data logged); revisit when sync paths run real data
 - Tidal scope verification (Ovidiu owns; src/providers/tidal/scopes.ts has TODO)
-- 4 Tidal URL constants TODO(ovidiu) markers (M1 from Sprint 4 review): F-006 ISRC search, F-007 fuzzy search, F-008 playlist CRUD, F-008 PLAYLIST_PRIVACY
+- 4 Tidal URL constants TODO(ovidiu) markers (M1 from Sprint 4 review): F-006 ISRC search, F-007 fuzzy search, F-008 playlist CRUD, F-008 PLAYLIST_PRIVACY — RESOLVED 2026-04-27 by Sprint 7 Steps 1-4 (all four now carry `Verified:` markers post-audit)
 - Wrangler upgrade (compat-date pinned to 2024-12-30)
 - D4 (Sprint 4 review): F-007 fuzzy search query normalises artist via title-normalisation helper — consider spec amendment or code change
 - Worktree-isolation harness bug (Sprints 2+3+4+5): `isolation: "worktree"` is silently a no-op; file separately
+
+## Session 8 - Sprint 7 Steps 1-4 — pre-deploy spec audit + OAS-grounded fixes (2026-04-27)
+- Mode: single-session (Opus). Goal: walk for-ovidiu.md verification checklist, fix what the audit surfaces, lay down durable guardrails.
+- Steps 1-4 of for-ovidiu.md complete: all four Tidal/Spotify URL constants now have `Verified:` markers + canonical OAS source URLs cited in code.
+- Bug fixes shipped (all OAS-grounded):
+  - F-006 (commit 812cda3): isrc.ts modeled Tidal v2 as flat objects; rewritten to consume JSON:API `data[].attributes` + ISO-8601 duration + `included[]` artist resolution. Coverage 98%/95% on touched code.
+  - F-007 (commit e7e0e9c): fuzzy.ts had 5 stacked bugs (URL casing, undocumented limit, wrong array, fabricated flat shape, wrong endpoint with too-narrow include). Switched to `/v2/searchResults/{id}?include=tracks,artists,albums`. Hoisted shared helpers into new `src/match/json-api.ts` (parseIsoDurationMs + buildIncludedIndex + lookupIncluded). Coverage 100%/100%.
+  - F-008 (this session): 6 bugs — `title` → `name`, `privacy` (non-existent) → `accessType: UNLISTED`, BATCH_SIZE 100 → 20 (OAS maxItems cap), missing required `meta.positionBefore` added with empty-string semantic (unverified — to confirm Step 18), undocumented `&limit=100` dropped from GET items URL. F-008-R3 spec amended (Tidal v2 has no PRIVATE; UNLISTED is closest).
+- Durable guardrails (commit afb5389):
+  - `openapi-typescript` devDep added; generates `src/providers/tidal/openapi-types.ts` (~23k lines) directly from canonical OAS. `npm run gen:tidal-types` for refresh.
+  - Cross-Cutting Concerns rule in context_summary.md: external-API code MUST be grounded against canonical spec at write-time; prefer generated types; TODO(ovidiu) is never an acceptable substitute for grounding.
+  - Auto-memory feedback entry persists across sessions/projects.
+- Stage 5 hook evolution (commit 386401b): now accepts `Verified:` marker post-audit, not just `TODO(ovidiu)` pre-audit. Resolves the workflow conflict where verification step said "remove TODO" but hook then blocked.
+- Tests: 503/503 passing (was 470 pre-Sprint-7 — net +33 tests across the new json-api module, expanded fuzzy/score/isrc/playlist coverage). tsc clean. All 5 TaskCompleted hook stages green.
+- Pushed to origin/main with Ovidiu's explicit confirmation (auto-confirmation gate caught the first attempt; standing rule preserved).
+
+## Next Session — Sprint 7 Steps 5-6 + Phase 2 (pre-deploy)
+- Step 5: verify `src/routes/unmatched.ts:10-11` per-id GET endpoint (same shape as Step 2; should be a quick cross-check)
+- Step 6: verify Tidal app scopes against developer.tidal.com portal (Ovidiu owns the cross-check)
+- Phase 2: secrets minting + dev-portal redirect URI configuration
+- Phase 3: deploy + first OAuth + manual sync
+- Carry-over: F-Integ extension (closes Sprint 3 D5 + Sprint 4 D3 + Sprint 5 lock semantics drift)

@@ -2,7 +2,7 @@ import type { Env } from "../../env";
 import { tidalFetch } from "./client";
 import {
   BATCH_SIZE,
-  PLAYLIST_PRIVACY,
+  PLAYLIST_ACCESS_TYPE,
   TIDAL_PLAYLISTS_URL,
   playlistUrl,
   playlistTracksUrl,
@@ -10,8 +10,15 @@ import {
 
 export interface TidalPlaylist {
   id: string;
-  title: string;
+  /** Playlist's display name (Tidal v2 `attributes.name`). */
+  name: string;
 }
+
+// Tidal's add-tracks payload requires `meta.positionBefore` (string) on
+// PlaylistsItemsRelationshipAddOperation_Payload. The OAS doesn't document
+// the semantic — empty string is interpreted here as "append at end" until
+// confirmed against real Tidal traffic during pre-deploy Step 18.
+const APPEND_POSITION = "";
 
 export interface PlaylistTracksPage {
   trackIds: string[];
@@ -27,14 +34,14 @@ async function sleep(ms: number): Promise<void> {
 }
 
 /** Create a new Tidal playlist. Returns the created playlist id. */
-export async function createPlaylist(env: Env, title: string): Promise<string> {
+export async function createPlaylist(env: Env, name: string): Promise<string> {
   const body = JSON.stringify({
     data: {
       type: "playlists",
       attributes: {
-        title,
+        name,
         description: PLAYLIST_DESCRIPTION,
-        privacy: PLAYLIST_PRIVACY,
+        accessType: PLAYLIST_ACCESS_TYPE,
       },
     },
   });
@@ -60,9 +67,9 @@ export async function getPlaylist(
     throw new Error(`getPlaylist failed: HTTP ${response.status}`);
   }
   const json = (await response.json()) as {
-    data: { id: string; attributes: { title: string } };
+    data: { id: string; attributes: { name: string } };
   };
-  return { id: json.data.id, title: json.data.attributes.title };
+  return { id: json.data.id, name: json.data.attributes.name };
 }
 
 /** Fetch one page of playlist track ids. */
@@ -71,7 +78,7 @@ export async function getPlaylistTracks(
   playlistId: string,
   cursor: string | null = null,
 ): Promise<PlaylistTracksPage> {
-  let url = `${playlistTracksUrl(playlistId)}?include=items&limit=100`;
+  let url = `${playlistTracksUrl(playlistId)}?include=items`;
   if (cursor) url += `&page[cursor]=${encodeURIComponent(cursor)}`;
   const response = await tidalFetch(env, url);
   if (!response.ok) {
@@ -158,6 +165,7 @@ async function _addBatch(
 ): Promise<BatchResult> {
   const body = JSON.stringify({
     data: batch.map((id) => ({ type: "tracks", id })),
+    meta: { positionBefore: APPEND_POSITION },
   });
 
   const first = await tidalFetch(env, playlistTracksUrl(playlistId), {

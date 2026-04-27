@@ -57,11 +57,21 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+// Tidal Open API v2 grounding for these tests:
+//   - Create payload: PlaylistsCreateOperation_Payload_Data_Attributes
+//     required: ["name"]; allowed: accessType (PUBLIC|UNLISTED), createdAt,
+//     description, name. NO `privacy` attribute, NO `title` attribute.
+//   - Read attributes: Playlists_Attributes uses `name` (not `title`).
+//   - Add-tracks: PlaylistsItemsRelationshipAddOperation_Payload requires
+//     data (maxItems: 20) AND meta.positionBefore (string, required).
+//   - GET items: documented query params are page[cursor], countryCode,
+//     include — NOT `limit`.
+
 describe("createPlaylist", () => {
-  it("sends POST with correct body and returns id", async () => {
+  it("sends JSON:API POST body with attributes.name + accessType=UNLISTED", async () => {
     const env = makeEnv();
     mockTidalFetch.mockResolvedValueOnce(
-      ok({ data: { id: "PLAYLIST_X", attributes: { title: "Spotify Liked" } } }),
+      ok({ data: { id: "PLAYLIST_X", attributes: { name: "Spotify Liked" } } }),
     );
 
     const id = await createPlaylist(env, "Spotify Liked");
@@ -72,8 +82,11 @@ describe("createPlaylist", () => {
     expect(call[1]).toContain("/playlists");
     expect(call[2].method).toBe("POST");
     const body = JSON.parse(call[2].body as string);
-    expect(body.data.attributes.title).toBe("Spotify Liked");
-    expect(body.data.attributes.privacy).toBe("private");
+    expect(body.data.type).toBe("playlists");
+    expect(body.data.attributes.name).toBe("Spotify Liked");
+    expect(body.data.attributes.accessType).toBe("UNLISTED");
+    expect(body.data.attributes).not.toHaveProperty("title");
+    expect(body.data.attributes).not.toHaveProperty("privacy");
     expect(body.data.attributes.description).toContain("spotify-roon-sync");
     expect(body.data.attributes.description).toContain("Do not edit manually");
   });
@@ -85,12 +98,12 @@ describe("createPlaylist", () => {
 });
 
 describe("getPlaylist", () => {
-  it("returns playlist on 200", async () => {
+  it("parses attributes.name from response", async () => {
     mockTidalFetch.mockResolvedValueOnce(
-      ok({ data: { id: "PL1", attributes: { title: "Spotify Liked" } } }),
+      ok({ data: { id: "PL1", attributes: { name: "Spotify Liked" } } }),
     );
     const result = await getPlaylist(makeEnv(), "PL1");
-    expect(result).toEqual({ id: "PL1", title: "Spotify Liked" });
+    expect(result).toEqual({ id: "PL1", name: "Spotify Liked" });
   });
 
   it("returns null on 404", async () => {
@@ -213,17 +226,18 @@ describe("addTracksToPlaylist — 429 handling (F-008-R8)", () => {
   });
 
   it("partial last batch: 429 abort does not underflow error count (m8)", async () => {
-    // 105 ids: batch 1 (100) succeeds, batch 2 (5) gets 429 then second 429 → abort
-    // Without Math.max(0, ...), errors would be: 5 (batch errors) + (105-100-100) = 5 + (-95) = -90
+    // BATCH_SIZE+5 ids: batch 1 (BATCH_SIZE) succeeds, batch 2 (5) gets two 429s → abort.
+    // Without Math.max(0, ...), errors would be: 5 + (total - BATCH_SIZE - BATCH_SIZE)
+    // i.e. 5 + (BATCH_SIZE+5 - 2*BATCH_SIZE) = 5 - BATCH_SIZE, which is negative when BATCH_SIZE > 5.
     const retryHeaders = { "Retry-After": "0" };
-    const ids = Array.from({ length: 105 }, (_, i) => `T${i}`);
+    const ids = Array.from({ length: BATCH_SIZE + 5 }, (_, i) => `T${i}`);
     mockTidalFetch
-      .mockResolvedValueOnce(ok({}))   // batch 1 (100 items) → success
+      .mockResolvedValueOnce(ok({}))   // batch 1 (BATCH_SIZE items) → success
       .mockResolvedValueOnce(new Response("{}", { status: 429, headers: retryHeaders })) // batch 2 first try
       .mockResolvedValueOnce(new Response("{}", { status: 429, headers: retryHeaders })); // batch 2 retry → abort
 
     const result = await addTracksToPlaylist(makeEnv(), "PL1", ids);
-    expect(result.added).toBe(100);
+    expect(result.added).toBe(BATCH_SIZE);
     expect(result.errors).toBe(5); // the 5-item last batch, NOT negative
     expect(result.errors).toBeGreaterThanOrEqual(0);
   });
@@ -292,6 +306,62 @@ describe("addTracksToPlaylist — invalid track id handling", () => {
     expect(result.added).toBe(2);
     expect(result.invalidIds).toHaveLength(0);
     expect(result.errors).toBe(0);
+  });
+});
+
+describe("addTracksToPlaylist — request body shape (OAS-grounded)", () => {
+  it("BATCH_SIZE matches Tidal OAS PlaylistsItemsRelationshipAddOperation maxItems (20)", () => {
+    expect(BATCH_SIZE).toBeLessThanOrEqual(20);
+    expect(BATCH_SIZE).toBeGreaterThan(0);
+  });
+
+  it("body has top-level meta.positionBefore (required string per OAS)", async () => {
+    mockTidalFetch.mockResolvedValueOnce(ok({}));
+    await addTracksToPlaylist(makeEnv(), "PL1", ["T1", "T2"]);
+    const call = mockTidalFetch.mock.calls[0];
+    const body = JSON.parse(call[2].body as string);
+    expect(typeof body.meta?.positionBefore).toBe("string");
+  });
+
+  it("data items have type='tracks' and id (Resource_Identifier shape)", async () => {
+    mockTidalFetch.mockResolvedValueOnce(ok({}));
+    await addTracksToPlaylist(makeEnv(), "PL1", ["TRACK_A", "TRACK_B"]);
+    const call = mockTidalFetch.mock.calls[0];
+    const body = JSON.parse(call[2].body as string);
+    expect(body.data).toEqual([
+      { type: "tracks", id: "TRACK_A" },
+      { type: "tracks", id: "TRACK_B" },
+    ]);
+  });
+
+  it("respects BATCH_SIZE limit (splits a >BATCH_SIZE list into multiple POSTs)", async () => {
+    // Construct exactly BATCH_SIZE+1 ids → expect 2 POST calls
+    const ids = Array.from({ length: BATCH_SIZE + 1 }, (_, i) => `T${i}`);
+    mockTidalFetch.mockResolvedValue(ok({}));
+
+    await addTracksToPlaylist(makeEnv(), "PL1", ids);
+
+    expect(mockTidalFetch).toHaveBeenCalledTimes(2);
+    const firstBody = JSON.parse(mockTidalFetch.mock.calls[0][2].body as string);
+    const secondBody = JSON.parse(mockTidalFetch.mock.calls[1][2].body as string);
+    expect(firstBody.data).toHaveLength(BATCH_SIZE);
+    expect(secondBody.data).toHaveLength(1);
+  });
+});
+
+describe("getPlaylistTracks — URL shape (OAS-grounded)", () => {
+  it("does NOT pass an undocumented `limit` query parameter", async () => {
+    mockTidalFetch.mockResolvedValueOnce(ok({ included: [], meta: {} }));
+    await getPlaylistTracks(makeEnv(), "PL1");
+    const url: string = mockTidalFetch.mock.calls[0][1];
+    expect(url).not.toMatch(/[?&]limit=/);
+  });
+
+  it("uses page[cursor] for pagination (the documented query param)", async () => {
+    mockTidalFetch.mockResolvedValueOnce(ok({ included: [], meta: {} }));
+    await getPlaylistTracks(makeEnv(), "PL1", "cursor_xyz");
+    const url: string = mockTidalFetch.mock.calls[0][1];
+    expect(url).toContain("page[cursor]=cursor_xyz");
   });
 });
 

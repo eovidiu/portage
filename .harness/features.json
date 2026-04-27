@@ -374,12 +374,13 @@
       "assigned_to": null,
       "test_file": "tests/sync/playlist-writer.test.ts",
       "coverage": "src/providers/tidal/playlist.ts: 100% stmts, 98.41% branches, 100% funcs, 100% lines; src/providers/tidal/playlist-endpoints.ts: 100%; src/sync/playlist-writer.ts: 100% stmts, 100% branches, 100% funcs, 100% lines; src/db/matches.ts: 100%; src/db/sync_state.ts: 100%; src/db/unmatched.ts: 100% (istanbul)",
-      "notes": "Writes to a single named playlist per ADR-006, not Tidal favourites. 429 handled inline per Meta-Pattern M1. BATCH_SIZE=100 sourced from Tidal API docs. requeueForInvalidTidalId unconditional upsert (bypasses status='pending' guard in upsertUnmatched). readState/writeState generic helpers added to sync_state.ts alongside cursor-specific functions. Schema migration applied to live Neon by lead via Neon MCP on 2026-04-26; db/schema.sql patched in fix wave.",
+      "notes": "Writes to a single named playlist per ADR-006, not Tidal favourites. 429 handled inline per Meta-Pattern M1. Sprint 7 (2026-04-27) fixed six OAS-grounded bugs: (1) attribute is 'name' not 'title' on create + read, (2) accessType (UNLISTED) replaces non-existent 'privacy' field, (3) BATCH_SIZE corrected to 20 per OAS PlaylistsItemsRelationshipAddOperation_Payload.data.maxItems, (4) add-tracks body now sends required meta.positionBefore (empty string = append; semantics unverified, will confirm pre-deploy Step 18), (5) GET items URL no longer sends undocumented limit=100 (page[cursor] only), (6) F-008-R3 spec amended (private → UNLISTED). requeueForInvalidTidalId unconditional upsert (bypasses status='pending' guard in upsertUnmatched). readState/writeState generic helpers added to sync_state.ts. Schema migration applied to live Neon 2026-04-26.",
       "correction_cycles": 0,
       "scope_expansions": [],
       "approaches_tried": [
         "playlist-endpoints.ts for URL constants + BATCH_SIZE; playlist.ts for API surface (createPlaylist/getPlaylist/getPlaylistTracks/getAllPlaylistTrackIds/addTracksToPlaylist); playlist-writer.ts for orchestration (ensurePlaylist + dedupe + batch-append + invalid-requeue + watermark advance)",
-        "Sprint-4 fix wave: added tidal_id_invalid to schema.sql; added TODO(ovidiu) markers per M1; lifted 'private' to PLAYLIST_PRIVACY constant; fixed error-count underflow in addTracksToPlaylist; added description-assertion test"
+        "Sprint-4 fix wave: added tidal_id_invalid to schema.sql; added TODO(ovidiu) markers per M1; lifted 'private' to PLAYLIST_PRIVACY constant; fixed error-count underflow in addTracksToPlaylist; added description-assertion test",
+        "Sprint-7 OAS-grounding wave (Step 4 verification): renamed TidalPlaylist.title → name; renamed body field privacy → accessType with value UNLISTED; BATCH_SIZE 100 → 20 per OAS maxItems; added meta.positionBefore to add-tracks body; dropped limit=100 from GET items URL; spec amended F-008-R3 (UNLISTED only). 6 RED tests (5 existing + 1 batch-split) → GREEN. Verified: marker added above TIDAL_PLAYLISTS_URL."
       ],
       "failure_reason": null,
       "discovered_via": null
