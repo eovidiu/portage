@@ -60,8 +60,8 @@ After matching, the system writes newly-matched Tidal track IDs into a designate
 |---|---|
 | F-008-R1 | The playlist title MUST be configurable via `TIDAL_PLAYLIST_TITLE` env var, defaulting to `"Spotify Liked"`. |
 | F-008-R2 | The playlist description MUST be `"Synced from Spotify by spotify-roon-sync. Do not edit manually."`. |
-| F-008-R3 | The playlist MUST be created with privacy set to private. |
-| F-008-R4 | The system MUST batch additions per Tidal's API limit; the batch size MUST be sourced from the Tidal Open API reference at implementation time and committed to a constants file. The default batch size MUST NOT exceed 100. |
+| F-008-R3 | The playlist MUST be created with `accessType` set to `UNLISTED`. (Tidal Open API v2's `accessType` enum is `[PUBLIC, UNLISTED]` — no `PRIVATE` value exists. `UNLISTED` is the closest non-public option: not surfaced in browse/search, accessible only via direct id or share link.) |
+| F-008-R4 | The system MUST batch additions per Tidal's API limit; the batch size MUST be sourced from the Tidal Open API reference at implementation time and committed to a constants file. The OAS schema `PlaylistsItemsRelationshipAddOperation_Payload` enforces `maxItems: 20`, so BATCH_SIZE MUST be at most 20. |
 | F-008-R5 | The system MUST de-duplicate against the playlist's current contents before adding. |
 | F-008-R6 | The order of additions in a single run MUST be ascending by `matched_at`. |
 | F-008-R7 | If the playlist write API returns HTTP 401, the system MUST refresh the Tidal token (F-003) and retry once. |
