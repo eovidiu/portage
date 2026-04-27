@@ -4,12 +4,17 @@ import { insertMatch } from "../db/matches";
 import { artistAgrees } from "./artist";
 import type { Env } from "../env";
 
-// Tidal Open API v2 — search by ISRC
+// Tidal Open API v2 — search by ISRC.
 // https://developer.tidal.com/reference/get_tracks-v2
-// TODO(ovidiu): Verify URL template + ISRC filter param against Tidal Open API v2 docs.
+//
+// The response is JSON:API: track resources expose attributes (`isrc`,
+// `duration` as ISO-8601 like "PT3M40S") and a `relationships.artists.data[]`
+// list of artist refs. Artist names live in the top-level `included[]` array
+// when the request sets `include=artists`.
 const TIDAL_TRACKS_URL = "https://openapi.tidal.com/v2/tracks";
 
 const DURATION_TOLERANCE_MS = 2000;
+const ISO_DURATION_RE = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/;
 
 export interface TrackCandidate {
   spotify_id: string;
@@ -30,51 +35,80 @@ export interface MatchResult {
   errors: PerTrackError[];
 }
 
-interface TidalArtist {
-  name: string;
-}
-
-interface TidalTrack {
+interface JsonApiResource {
   id: string;
-  isrc?: string;
-  artists?: TidalArtist[];
-  duration?: number;
+  type: string;
+  attributes?: Record<string, unknown>;
+  relationships?: Record<string, { data?: Array<{ id: string; type: string }> | { id: string; type: string } }>;
 }
 
 interface TidalSearchResponse {
-  data?: TidalTrack[];
+  data?: JsonApiResource[];
+  included?: JsonApiResource[];
 }
 
-function parseDurationMs(tidalTrack: TidalTrack): number | null {
-  if (typeof tidalTrack.duration === "number") return tidalTrack.duration * 1000;
-  return null;
+interface ResolvedCandidate {
+  id: string;
+  durationMs: number | null;
+  primaryArtist: string;
+}
+
+function parseIsoDurationMs(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const m = ISO_DURATION_RE.exec(value);
+  if (!m || (!m[1] && !m[2] && !m[3])) return null;
+  const hours = m[1] ? parseInt(m[1], 10) : 0;
+  const minutes = m[2] ? parseInt(m[2], 10) : 0;
+  const seconds = m[3] ? parseFloat(m[3]) : 0;
+  return Math.round((hours * 3600 + minutes * 60 + seconds) * 1000);
+}
+
+function buildArtistLookup(included: JsonApiResource[] | undefined): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!included) return map;
+  for (const r of included) {
+    if (r.type !== "artists") continue;
+    const name = r.attributes?.name;
+    if (typeof name === "string") map.set(r.id, name);
+  }
+  return map;
+}
+
+function resolveCandidate(
+  track: JsonApiResource,
+  artistLookup: Map<string, string>,
+): ResolvedCandidate {
+  const artistsRel = track.relationships?.artists?.data;
+  const firstArtistRef = Array.isArray(artistsRel) ? artistsRel[0] : undefined;
+  const primaryArtist =
+    firstArtistRef !== undefined ? (artistLookup.get(firstArtistRef.id) ?? "") : "";
+  const durationMs = parseIsoDurationMs(track.attributes?.duration);
+  return { id: track.id, durationMs, primaryArtist };
 }
 
 function pickBestCandidate(
-  candidates: TidalTrack[],
+  candidates: ResolvedCandidate[],
   spotifyDurationMs: number | null,
-): TidalTrack | null {
+): ResolvedCandidate | null {
   if (candidates.length === 0) return null;
   if (candidates.length === 1) {
-    if (spotifyDurationMs === null) return candidates[0];
-    const durationMs = parseDurationMs(candidates[0]);
-    if (durationMs === null) return candidates[0];
-    return Math.abs(durationMs - spotifyDurationMs) <= DURATION_TOLERANCE_MS
+    if (spotifyDurationMs === null || candidates[0].durationMs === null) return candidates[0];
+    return Math.abs(candidates[0].durationMs - spotifyDurationMs) <= DURATION_TOLERANCE_MS
       ? candidates[0]
       : null;
   }
 
-  // Multiple candidates: pick the one with minimum duration delta, within tolerance
-  let best: TidalTrack | null = null;
+  // Multiple candidates: pick the one with minimum duration delta, within tolerance.
+  // Candidates with unknown durations (either side null) fall back to first-seen.
+  let best: ResolvedCandidate | null = null;
   let bestDelta = Infinity;
 
   for (const c of candidates) {
-    const durationMs = parseDurationMs(c);
-    if (spotifyDurationMs === null || durationMs === null) {
+    if (spotifyDurationMs === null || c.durationMs === null) {
       if (best === null) best = c;
       continue;
     }
-    const delta = Math.abs(durationMs - spotifyDurationMs);
+    const delta = Math.abs(c.durationMs - spotifyDurationMs);
     if (delta <= DURATION_TOLERANCE_MS && delta < bestDelta) {
       best = c;
       bestDelta = delta;
@@ -92,7 +126,10 @@ async function fetchByIsrc(
   env: Env,
   isrc: string,
 ): Promise<{ response: Response; retried: boolean }> {
-  const url = `${TIDAL_TRACKS_URL}?filter[isrc]=${encodeURIComponent(isrc)}`;
+  // include=artists materialises artist resources in `included[]` so the matcher
+  // can verify F-006-R3 artist agreement; without this Tidal returns only artist
+  // refs in `relationships`, leaving names unresolved.
+  const url = `${TIDAL_TRACKS_URL}?filter[isrc]=${encodeURIComponent(isrc)}&include=artists`;
   const first = await tidalFetch(env, url);
   if (first.status !== 429) return { response: first, retried: false };
 
@@ -174,23 +211,25 @@ export async function matchByIsrc(
       continue;
     }
 
-    const candidates = body.data ?? [];
-    if (candidates.length === 0) {
+    const rawCandidates = body.data ?? [];
+    if (rawCandidates.length === 0) {
       skipped++;
       continue;
     }
 
+    const artistLookup = buildArtistLookup(body.included);
+    const resolved = rawCandidates.map((c) => resolveCandidate(c, artistLookup));
+
     // Filter to candidates whose artist agrees with the Spotify artist
-    const agreeing = candidates.filter((c) => {
-      const tidalArtist = c.artists?.[0]?.name ?? "";
-      if (!artistAgrees(track.artist, tidalArtist)) {
+    const agreeing = resolved.filter((c) => {
+      if (!artistAgrees(track.artist, c.primaryArtist)) {
         console.log(
           JSON.stringify({
             event: "isrc_artist_mismatch",
             spotify_id: track.spotify_id,
             tidal_id: c.id,
             spotify_artist: track.artist,
-            tidal_artist: tidalArtist,
+            tidal_artist: c.primaryArtist,
           }),
         );
         return false;
