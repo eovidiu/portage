@@ -18,7 +18,7 @@ import { buildUpsertQueries, upsertTracks, type TrackRow } from "../../db/tracks
 import { readCursor, buildCursorQuery } from "../../db/sync_state";
 import type { Env } from "../../env";
 
-
+// Verified: 2026-04-27 against https://developer.spotify.com/documentation/web-api/reference/get-users-saved-tracks (path /v1/me/tracks, max page size = 50).
 const LIKED_SONGS_URL = "https://api.spotify.com/v1/me/tracks?limit=50";
 const CURSOR_KEY = "spotify_cursor";
 const CLOCK_SKEW_MS = 60_000;
