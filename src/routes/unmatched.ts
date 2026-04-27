@@ -7,7 +7,12 @@ import { tidalFetch } from "../providers/tidal/client";
 const LIMIT_DEFAULT = 20;
 const LIMIT_MAX = 100;
 
-// TODO(ovidiu): Verify Tidal track-by-id URL against Open API v2 docs.
+// Used as `${TIDAL_TRACKS_BASE}/${tidal_id}` to confirm a manually-supplied
+// tidal_id resolves before the I-001 atomic move (markMatched). Only the HTTP
+// status is consulted — the response body is intentionally ignored, so the
+// JSON:API shape of Tracks_Single_Resource_Data_Document doesn't need parsing
+// here. 404 → bad input; non-2xx → service unavailable.
+// Verified: 2026-04-27 against https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json (path /v2/tracks/{id} GET; path param id required; 404 documented as Default404ResponseBody; countryCode optional, injected by tidalFetch).
 const TIDAL_TRACKS_BASE = "https://openapi.tidal.com/v2/tracks";
 
 const unmatchedRoute = new Hono<{ Bindings: Env }>();
