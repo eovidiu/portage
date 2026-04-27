@@ -35,6 +35,7 @@ The Neon MCP server is available — `NEON_API_KEY` enables programmatic project
 - **No silent failures** (per spec conventions): every error path produces a structured log line with `run_id`, `feature`, `stage`, `error_code`, `message`
 - **Spec-first**: deviations from `docs/` require updating the spec before code. Reference `F-NNN` in commits and PRs.
 - **TDD with vitest**: every feature has a matching `T-NNN` test spec; coverage gate is 95% on touched code
+- **External-API code MUST be grounded against the canonical spec at write-time**: any constant or type definition that describes a Spotify/Tidal/etc. endpoint or response shape MUST cite the spec source URL + section near the declaration. For OpenAPI'd providers (Tidal, Spotify), prefer types generated via `openapi-typescript` (committed under `src/providers/<name>/openapi-types.ts`) over hand-written interfaces. `TODO(ovidiu): verify` is NEVER an acceptable substitute for grounding. Lesson from Sprint 6 audit: agents fabricated flat shapes for Tidal v2 (which is JSON:API), tests confirmed the wrong contract, fuzzy matcher would have shipped non-functional. Tidal OAS source: `https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json`. Spotify OAS: `https://github.com/sonallux/spotify-web-api/blob/main/fixed-spotify-open-api.yml` (community-maintained mirror; official docs at developer.spotify.com).
 
 ## Domain: spotify-roon-sync
 
