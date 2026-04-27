@@ -3,13 +3,34 @@ import { tidalFetch } from "../providers/tidal/client";
 import { insertMatch } from "../db/matches";
 import { upsertUnmatched } from "../db/unmatched";
 import { normaliseTitle } from "./title";
-import { scoreCandidate, tidalDurationMs, type TidalCandidateInput } from "./score";
+import { scoreCandidate, type ResolvedTidalCandidate } from "./score";
+import {
+  parseIsoDurationMs,
+  buildIncludedIndex,
+  lookupIncluded,
+  type JsonApiResource,
+  type IncludedIndex,
+} from "./json-api";
 import type { Env } from "../env";
 
-// Documented form as of 2026-04-26: GET /v2/searchresults/{query}/relationships/tracks
-// with ?countryCode=<CC>&include=tracks&limit=5
-// TODO(ovidiu): Verify search URL + query construction against Tidal Open API v2 docs.
-const TIDAL_SEARCH_BASE = "https://openapi.tidal.com/v2/searchresults";
+/**
+ * Tidal Open API v2 — fuzzy search by artist+title.
+ *
+ * We hit the singular `/searchResults/{id}` endpoint with
+ * `?include=tracks,artists,albums` so the response carries:
+ *   - data.relationships.tracks.data[]: refs to top track candidates
+ *   - included[]:                       full Tracks/Artists/Albums resources
+ *
+ * The relationships variant `/searchResults/{id}/relationships/tracks` only
+ * accepts `include=tracks` per the OAS, which leaves the candidates without
+ * resolvable artist/album metadata — the F-007 weighted score (artist 0.30 +
+ * album 0.10) couldn't reach the 0.85 accept threshold without those.
+ *
+ * Pagination on this endpoint is `page[cursor]`, NOT `limit`. F-007-R3 caps
+ * at 5 candidates; we slice client-side from `relationships.tracks.data[]`.
+ */
+// Verified: 2026-04-27 against https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json (path /v2/searchResults/{id} GET, camelCase; include enum allows tracks,artists,albums; data is SearchResults_Resource_Object).
+const TIDAL_SEARCH_BASE = "https://openapi.tidal.com/v2/searchResults";
 
 const ACCEPT_THRESHOLD = 0.85;
 const TIE_EPSILON = 0.001;
@@ -23,13 +44,8 @@ interface SpotifyTrackRow {
   duration_ms: number | null;
 }
 
-interface TidalSearchResponse {
-  data?: TidalCandidateInput[];
-  included?: TidalCandidateInput[];
-}
-
 interface ScoredCandidate {
-  candidate: TidalCandidateInput & { id: string };
+  candidate: ResolvedTidalCandidate;
   score: number;
   durationDelta: number;
 }
@@ -49,7 +65,7 @@ async function searchTidal(
   query: string,
 ): Promise<{ response: Response; retried: boolean }> {
   const encoded = encodeURIComponent(query);
-  const url = `${TIDAL_SEARCH_BASE}/${encoded}/relationships/tracks?include=tracks&limit=${MAX_CANDIDATES}`;
+  const url = `${TIDAL_SEARCH_BASE}/${encoded}?include=tracks,artists,albums`;
   const first = await tidalFetch(env, url);
   if (first.status !== 429) return { response: first, retried: false };
 
@@ -60,23 +76,75 @@ async function searchTidal(
   return { response: second, retried: true };
 }
 
-function extractCandidates(body: TidalSearchResponse): Array<TidalCandidateInput & { id: string }> {
-  const items = body.data ?? body.included ?? [];
-  return items
-    .filter((item): item is TidalCandidateInput & { id: string } =>
-      typeof (item as Record<string, unknown>).id === "string",
-    )
-    .slice(0, MAX_CANDIDATES);
+/** Resolve a single track resource into a scoring-ready candidate. */
+function resolveTrack(
+  track: JsonApiResource,
+  index: IncludedIndex,
+): ResolvedTidalCandidate {
+  const attrs = track.attributes ?? {};
+  const title = typeof attrs.title === "string" ? attrs.title : "";
+  const durationMs = parseIsoDurationMs(attrs.duration);
+
+  const artistRel = track.relationships?.artists?.data;
+  const firstArtistRef = Array.isArray(artistRel) ? artistRel[0] : undefined;
+  const artistResource = firstArtistRef
+    ? lookupIncluded(index, "artists", firstArtistRef.id)
+    : undefined;
+  const artistName = artistResource?.attributes?.name;
+  const primaryArtist = typeof artistName === "string" ? artistName : "";
+
+  const albumRel = track.relationships?.albums?.data;
+  const firstAlbumRef = Array.isArray(albumRel) ? albumRel[0] : undefined;
+  const albumResource = firstAlbumRef
+    ? lookupIncluded(index, "albums", firstAlbumRef.id)
+    : undefined;
+  const albumTitleAttr = albumResource?.attributes?.title;
+  const albumTitle = typeof albumTitleAttr === "string" ? albumTitleAttr : "";
+
+  return { id: track.id, title, primaryArtist, albumTitle, durationMs };
+}
+
+/**
+ * Walk a `/searchResults/{id}` response: pick top track refs from
+ * `data.relationships.tracks.data[]`, resolve each via `included[]`, and
+ * cap at MAX_CANDIDATES per F-007-R3.
+ */
+function extractCandidates(body: unknown): ResolvedTidalCandidate[] {
+  if (!body || typeof body !== "object") return [];
+  const b = body as Record<string, unknown>;
+
+  const data = b.data as
+    | {
+        relationships?: {
+          tracks?: { data?: Array<{ id: string; type: string }> };
+        };
+      }
+    | undefined;
+  const trackRefs = data?.relationships?.tracks?.data;
+  if (!Array.isArray(trackRefs)) return [];
+
+  const includedRaw = Array.isArray(b.included) ? (b.included as JsonApiResource[]) : [];
+  const index = buildIncludedIndex(includedRaw);
+
+  const out: ResolvedTidalCandidate[] = [];
+  for (const ref of trackRefs) {
+    if (out.length >= MAX_CANDIDATES) break;
+    if (!ref || typeof ref.id !== "string" || ref.type !== "tracks") continue;
+    const track = lookupIncluded(index, "tracks", ref.id);
+    if (!track) continue;
+    out.push(resolveTrack(track, index));
+  }
+  return out;
 }
 
 function rankCandidates(
   sp: SpotifyTrackRow,
-  candidates: Array<TidalCandidateInput & { id: string }>,
+  candidates: ResolvedTidalCandidate[],
 ): ScoredCandidate[] {
   return candidates
     .map((c) => {
       const breakdown = scoreCandidate(sp, c);
-      const tdMs = tidalDurationMs(c);
+      const tdMs = c.durationMs ?? 0;
       const spMs = sp.duration_ms ?? 0;
       return {
         candidate: c,
@@ -151,9 +219,9 @@ export async function matchByFuzzy(
       continue;
     }
 
-    let body: TidalSearchResponse;
+    let body: unknown;
     try {
-      body = (await tidalResponse.json()) as TidalSearchResponse;
+      body = await tidalResponse.json();
     } catch {
       errors.push({
         spotify_id: track.spotify_id,

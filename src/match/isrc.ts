@@ -2,19 +2,22 @@ import { neon } from "@neondatabase/serverless";
 import { tidalFetch } from "../providers/tidal/client";
 import { insertMatch } from "../db/matches";
 import { artistAgrees } from "./artist";
+import {
+  parseIsoDurationMs,
+  buildIncludedIndex,
+  lookupIncluded,
+  type JsonApiResource,
+} from "./json-api";
 import type { Env } from "../env";
 
-// Tidal Open API v2 — search by ISRC.
-// https://developer.tidal.com/reference/get_tracks-v2
-//
-// The response is JSON:API: track resources expose attributes (`isrc`,
-// `duration` as ISO-8601 like "PT3M40S") and a `relationships.artists.data[]`
-// list of artist refs. Artist names live in the top-level `included[]` array
-// when the request sets `include=artists`.
+// Tidal Open API v2 — search by ISRC. The response is JSON:API: track
+// resources expose attributes (`isrc`, `duration` as ISO-8601 like "PT3M40S")
+// and a `relationships.artists.data[]` list of artist refs. Artist names live
+// in the top-level `included[]` array when the request sets `include=artists`.
+// Verified: 2026-04-27 against https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json (path /v2/tracks GET; filter[isrc] array(string); attributes.duration ISO-8601).
 const TIDAL_TRACKS_URL = "https://openapi.tidal.com/v2/tracks";
 
 const DURATION_TOLERANCE_MS = 2000;
-const ISO_DURATION_RE = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$/;
 
 export interface TrackCandidate {
   spotify_id: string;
@@ -35,13 +38,6 @@ export interface MatchResult {
   errors: PerTrackError[];
 }
 
-interface JsonApiResource {
-  id: string;
-  type: string;
-  attributes?: Record<string, unknown>;
-  relationships?: Record<string, { data?: Array<{ id: string; type: string }> | { id: string; type: string } }>;
-}
-
 interface TidalSearchResponse {
   data?: JsonApiResource[];
   included?: JsonApiResource[];
@@ -53,35 +49,17 @@ interface ResolvedCandidate {
   primaryArtist: string;
 }
 
-function parseIsoDurationMs(value: unknown): number | null {
-  if (typeof value !== "string") return null;
-  const m = ISO_DURATION_RE.exec(value);
-  if (!m || (!m[1] && !m[2] && !m[3])) return null;
-  const hours = m[1] ? parseInt(m[1], 10) : 0;
-  const minutes = m[2] ? parseInt(m[2], 10) : 0;
-  const seconds = m[3] ? parseFloat(m[3]) : 0;
-  return Math.round((hours * 3600 + minutes * 60 + seconds) * 1000);
-}
-
-function buildArtistLookup(included: JsonApiResource[] | undefined): Map<string, string> {
-  const map = new Map<string, string>();
-  if (!included) return map;
-  for (const r of included) {
-    if (r.type !== "artists") continue;
-    const name = r.attributes?.name;
-    if (typeof name === "string") map.set(r.id, name);
-  }
-  return map;
-}
-
 function resolveCandidate(
   track: JsonApiResource,
-  artistLookup: Map<string, string>,
+  index: ReturnType<typeof buildIncludedIndex>,
 ): ResolvedCandidate {
   const artistsRel = track.relationships?.artists?.data;
   const firstArtistRef = Array.isArray(artistsRel) ? artistsRel[0] : undefined;
-  const primaryArtist =
-    firstArtistRef !== undefined ? (artistLookup.get(firstArtistRef.id) ?? "") : "";
+  const artistResource = firstArtistRef
+    ? lookupIncluded(index, "artists", firstArtistRef.id)
+    : undefined;
+  const artistName = artistResource?.attributes?.name;
+  const primaryArtist = typeof artistName === "string" ? artistName : "";
   const durationMs = parseIsoDurationMs(track.attributes?.duration);
   return { id: track.id, durationMs, primaryArtist };
 }
@@ -217,8 +195,8 @@ export async function matchByIsrc(
       continue;
     }
 
-    const artistLookup = buildArtistLookup(body.included);
-    const resolved = rawCandidates.map((c) => resolveCandidate(c, artistLookup));
+    const includedIndex = buildIncludedIndex(body.included);
+    const resolved = rawCandidates.map((c) => resolveCandidate(c, includedIndex));
 
     // Filter to candidates whose artist agrees with the Spotify artist
     const agreeing = resolved.filter((c) => {
