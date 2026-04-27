@@ -40,7 +40,7 @@ Covers F-008.
 
 **Action**: Run the writer on a fresh state.
 
-**Assertion**: The privacy/visibility field in the request body equals `"private"` (or the equivalent Tidal API value documented in the constants file).
+**Assertion**: The `attributes.accessType` field in the request body equals `"UNLISTED"` (per F-008-R3 amendment; Tidal Open API v2's accessType enum is `[PUBLIC, UNLISTED]` only — no `PRIVATE` value).
 
 **Pass**: TRUE if equal.
 
