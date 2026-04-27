@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
-# Stage 5 TODO-marker gate.
+# Stage 5 audit-marker gate.
 #
 # Mechanically enforces the "audit-marker discipline" anti-pattern that hit
-# Sprint 4 (TODO(ovidiu) markers asymmetric across parallel teammates: F-007 had
-# the marker, F-006 + F-008 didn't). Same family of issue as Sprint 3's
+# Sprint 4 (TODO(ovidiu) markers asymmetric across parallel teammates: F-007
+# had the marker, F-006 + F-008 didn't). Same family of issue as Sprint 3's
 # coverage-claim recurrence and Sprint 4's schema-drift recurrence.
 #
 # Detection scope:
 #   Top-level constants in src/ assigned a string literal containing one of the
 #   external-API URL prefixes that need Ovidiu's verification.
 #
-# Required: each such constant must have a `TODO(ovidiu)` comment on the
-# immediately preceding non-blank source line (single-line // or end of /* */).
+# Required marker: each such constant must have ONE of the following on the
+# immediately preceding non-blank source line:
+#   - `TODO(ovidiu)`  pre-verification: URL not yet cross-checked against canon spec
+#   - `Verified:`     post-verification: URL has been audited against the spec
+#                     (the comment SHOULD include a date and the spec source URL)
+#
+# Rationale: pre-deploy verification (`for-ovidiu.md` Steps 1-5) explicitly
+# says "When correct: remove the TODO(ovidiu) comment". Without an alternative
+# marker, every verified URL would need to keep a misleading TODO forever, or
+# the hook would block valid post-verification state. The `Verified:` marker
+# preserves the audit trail in-code.
 #
 # Skipped (avoid false positives):
 #   - URLs inside function bodies / template literals (those are usage, not specs)
@@ -41,6 +50,7 @@ CONSTANT_RE = re.compile(
 )
 
 TODO_MARKER_RE = re.compile(r'TODO\(ovidiu\)', re.IGNORECASE)
+VERIFIED_MARKER_RE = re.compile(r'Verified:', re.IGNORECASE)
 
 
 def find_constants(content: str) -> list[tuple[int, str, str]]:
@@ -52,9 +62,10 @@ def find_constants(content: str) -> list[tuple[int, str, str]]:
     return out
 
 
-def has_todo_above(lines: list[str], const_line_idx: int) -> bool:
+def has_audit_marker_above(lines: list[str], const_line_idx: int) -> bool:
     """Walk upward from `const_line_idx - 1` skipping blank lines.
-    Return True if the first non-blank line has a TODO(ovidiu) marker.
+    Return True if the first non-blank line has either a TODO(ovidiu) marker
+    (pre-verification) or a Verified: marker (post-verification).
     """
     i = const_line_idx - 1
     while i >= 0:
@@ -62,7 +73,7 @@ def has_todo_above(lines: list[str], const_line_idx: int) -> bool:
         if s == "":
             i -= 1
             continue
-        return bool(TODO_MARKER_RE.search(s))
+        return bool(TODO_MARKER_RE.search(s)) or bool(VERIFIED_MARKER_RE.search(s))
     return False
 
 
@@ -82,11 +93,11 @@ def main() -> int:
         rel = path.relative_to(PROJECT_ROOT)
         lines = content.split("\n")
         for line_no, const_name, url in find_constants(content):
-            if not has_todo_above(lines, line_no - 1):
+            if not has_audit_marker_above(lines, line_no - 1):
                 issues.append(
                     f"{rel}:{line_no}: const {const_name} (url contains "
                     f"{[p for p in URL_PATTERNS if p in url][0]}) "
-                    f"missing TODO(ovidiu) marker on the preceding line"
+                    f"missing TODO(ovidiu) or Verified: marker on the preceding line"
                 )
     if issues:
         for i in sorted(set(issues)):
