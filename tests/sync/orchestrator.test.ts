@@ -519,3 +519,54 @@ describe("T-009-14: Single completion log line", () => {
     expect(completedLines).toHaveLength(1);
   });
 });
+
+// F-015: per-invocation budgets applied to ISRC, fuzzy, and Spotify pages.
+describe("F-015: bounded per-invocation budgets", () => {
+  it("uses defaults (ISRC=5, fuzzy=5, pages=1) when env not set", async () => {
+    setupSqlSuccess();
+    setupProviders();
+
+    await runSync(makeEnv());
+
+    // fetchLikedSongs called with maxPages = 1
+    expect(mockFetchLikedSongs).toHaveBeenCalledWith(expect.anything(), 1);
+    // fetchPendingMatchQueue: first non-lock neon() query, params = [5]
+    const queueCall = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(queueCall[1]).toEqual([5]);
+    // matchByFuzzy called with options.limit = 5
+    expect(mockMatchByFuzzy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ limit: 5, syncRunId: "run-001" }),
+    );
+  });
+
+  it("honours MATCH_BATCH_ISRC, MATCH_BATCH_FUZZY, LIKED_PAGES_PER_RUN env overrides", async () => {
+    setupSqlSuccess();
+    setupProviders();
+
+    const env = { ...makeEnv(), MATCH_BATCH_ISRC: "8", MATCH_BATCH_FUZZY: "12", LIKED_PAGES_PER_RUN: "3" };
+    await runSync(env);
+
+    expect(mockFetchLikedSongs).toHaveBeenCalledWith(expect.anything(), 3);
+    expect(mockSql.mock.calls[0][1]).toEqual([8]);
+    expect(mockMatchByFuzzy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ limit: 12 }),
+    );
+  });
+
+  it("falls back to default when env is invalid (NaN, zero, negative)", async () => {
+    setupSqlSuccess();
+    setupProviders();
+
+    const env = { ...makeEnv(), MATCH_BATCH_ISRC: "not-a-number", MATCH_BATCH_FUZZY: "0", LIKED_PAGES_PER_RUN: "-2" };
+    await runSync(env);
+
+    expect(mockFetchLikedSongs).toHaveBeenCalledWith(expect.anything(), 1);
+    expect(mockSql.mock.calls[0][1]).toEqual([5]);
+    expect(mockMatchByFuzzy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ limit: 5 }),
+    );
+  });
+});

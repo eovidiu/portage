@@ -112,3 +112,25 @@ WHERE unmatched.status = 'pending';
 - For a curated set of 20 tracks with known Spotify and Tidal IDs and intentionally varied metadata (remasters, featurings, remixes), the matcher achieves at least 80% precision at threshold 0.85
 - A clearly-different track does not produce a false match (e.g., "Yesterday" by The Beatles vs "Yesterday" by Atmosphere)
 - The same input produces the same score on every run (deterministic)
+
+## Amendment 2026-05-02 (F-015 + Sprint 6 review M2/M3): cooldown + skipped exclusion
+
+The unmatched-queue eligibility predicate was previously over-broad: F-007's
+fuzzy stage re-evaluated tracks that the operator had skipped via F-012, AND
+re-evaluated pending unmatched tracks on every cron tick. This violated
+F-012-R10/R11 (operator review semantics) and burned subrequests on hopeless
+retries. With the F-015 50-subrequest budget, both behaviours are corrected:
+
+- **R10** — Tracks with `unmatched.status = 'skipped'` MUST NEVER re-enter the
+  fuzzy queue.
+- **R11** — Tracks with `unmatched.status = 'pending'` and
+  `last_attempt_at >= now() - interval '7 days'` MUST be excluded from the
+  fuzzy queue. Pending rows attempted longer ago re-enter normally.
+- **R12** — `matchByFuzzy` accepts a `limit` option; the underlying
+  `fetchUnmatchedTracks` query applies `LIMIT $1` to bound subrequests.
+  Default in production is 5; orchestrator sets via env `MATCH_BATCH_FUZZY`.
+- **R13** — Order is `t.first_seen_at ASC` so older un-attempted tracks
+  drain first (fairness).
+
+The same eligibility predicate is shared with the ISRC stage's
+`fetchPendingMatchQueue` in `src/db/tracks.ts`; both SELECTs MUST stay in sync.

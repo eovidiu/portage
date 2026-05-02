@@ -9,6 +9,7 @@ import {
   type JsonApiResource,
 } from "./json-api";
 import type { Env } from "../env";
+import type { TrackCandidate } from "../db/tracks";
 
 // Tidal Open API v2 — search by ISRC. The response is JSON:API: track
 // resources expose attributes (`isrc`, `duration` as ISO-8601 like "PT3M40S")
@@ -19,12 +20,8 @@ const TIDAL_TRACKS_URL = "https://openapi.tidal.com/v2/tracks";
 
 const DURATION_TOLERANCE_MS = 2000;
 
-export interface TrackCandidate {
-  spotify_id: string;
-  isrc: string | null;
-  artist: string;
-  duration_ms: number | null;
-}
+// Re-export for back-compat (the type now lives in src/db/tracks.ts).
+export type { TrackCandidate } from "../db/tracks";
 
 export interface PerTrackError {
   spotify_id: string;

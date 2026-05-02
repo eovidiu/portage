@@ -1,8 +1,8 @@
 {
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
-  "total_features": 17,
-  "passing": 17,
+  "total_features": 18,
+  "passing": 18,
   "features": [
     {
       "id": "F014",
@@ -374,13 +374,13 @@
       "assigned_to": null,
       "test_file": "tests/sync/playlist-writer.test.ts",
       "coverage": "src/providers/tidal/playlist.ts: 100% stmts, 98.41% branches, 100% funcs, 100% lines; src/providers/tidal/playlist-endpoints.ts: 100%; src/sync/playlist-writer.ts: 100% stmts, 100% branches, 100% funcs, 100% lines; src/db/matches.ts: 100%; src/db/sync_state.ts: 100%; src/db/unmatched.ts: 100% (istanbul)",
-      "notes": "Writes to a single named playlist per ADR-006, not Tidal favourites. 429 handled inline per Meta-Pattern M1. Sprint 7 (2026-04-27) fixed six OAS-grounded bugs: (1) attribute is 'name' not 'title' on create + read, (2) accessType (UNLISTED) replaces non-existent 'privacy' field, (3) BATCH_SIZE corrected to 20 per OAS PlaylistsItemsRelationshipAddOperation_Payload.data.maxItems, (4) add-tracks body now sends required meta.positionBefore (empty string = append; semantics unverified, will confirm pre-deploy Step 18), (5) GET items URL no longer sends undocumented limit=100 (page[cursor] only), (6) F-008-R3 spec amended (private → UNLISTED). requeueForInvalidTidalId unconditional upsert (bypasses status='pending' guard in upsertUnmatched). readState/writeState generic helpers added to sync_state.ts. Schema migration applied to live Neon 2026-04-26.",
+      "notes": "Writes to a single named playlist per ADR-006, not Tidal favourites. 429 handled inline per Meta-Pattern M1. Sprint 7 (2026-04-27) fixed six OAS-grounded bugs: (1) attribute is 'name' not 'title' on create + read, (2) accessType (UNLISTED) replaces non-existent 'privacy' field, (3) BATCH_SIZE corrected to 20 per OAS PlaylistsItemsRelationshipAddOperation_Payload.data.maxItems, (4) add-tracks body now sends required meta.positionBefore (empty string = append; semantics unverified, will confirm pre-deploy Step 18), (5) GET items URL no longer sends undocumented limit=100 (page[cursor] only), (6) F-008-R3 spec amended (private \u2192 UNLISTED). requeueForInvalidTidalId unconditional upsert (bypasses status='pending' guard in upsertUnmatched). readState/writeState generic helpers added to sync_state.ts. Schema migration applied to live Neon 2026-04-26.",
       "correction_cycles": 0,
       "scope_expansions": [],
       "approaches_tried": [
         "playlist-endpoints.ts for URL constants + BATCH_SIZE; playlist.ts for API surface (createPlaylist/getPlaylist/getPlaylistTracks/getAllPlaylistTrackIds/addTracksToPlaylist); playlist-writer.ts for orchestration (ensurePlaylist + dedupe + batch-append + invalid-requeue + watermark advance)",
         "Sprint-4 fix wave: added tidal_id_invalid to schema.sql; added TODO(ovidiu) markers per M1; lifted 'private' to PLAYLIST_PRIVACY constant; fixed error-count underflow in addTracksToPlaylist; added description-assertion test",
-        "Sprint-7 OAS-grounding wave (Step 4 verification): renamed TidalPlaylist.title → name; renamed body field privacy → accessType with value UNLISTED; BATCH_SIZE 100 → 20 per OAS maxItems; added meta.positionBefore to add-tracks body; dropped limit=100 from GET items URL; spec amended F-008-R3 (UNLISTED only). 6 RED tests (5 existing + 1 batch-split) → GREEN. Verified: marker added above TIDAL_PLAYLISTS_URL."
+        "Sprint-7 OAS-grounding wave (Step 4 verification): renamed TidalPlaylist.title \u2192 name; renamed body field privacy \u2192 accessType with value UNLISTED; BATCH_SIZE 100 \u2192 20 per OAS maxItems; added meta.positionBefore to add-tracks body; dropped limit=100 from GET items URL; spec amended F-008-R3 (UNLISTED only). 6 RED tests (5 existing + 1 batch-split) \u2192 GREEN. Verified: marker added above TIDAL_PLAYLISTS_URL."
       ],
       "failure_reason": null,
       "discovered_via": null
@@ -545,6 +545,48 @@
       ],
       "failure_reason": null,
       "discovered_via": null
+    },
+    {
+      "id": "F-015",
+      "spec": "docs/specs/F-009-sync-orchestration.md (amendment); docs/specs/F-005, F-007, F-010 (amendments)",
+      "test_spec": null,
+      "description": "Bounded per-invocation orchestrator + Spotify page budget + fuzzy queue cooldown for Cloudflare Workers Free 50-subrequest cap",
+      "priority": 5,
+      "status": "passing",
+      "scope": [
+        "src/sync/orchestrator.ts",
+        "src/providers/spotify/liked.ts",
+        "src/match/fuzzy.ts",
+        "src/match/isrc.ts",
+        "src/db/tracks.ts",
+        "src/env.ts",
+        "wrangler.toml",
+        "tests/sync/orchestrator.test.ts",
+        "tests/providers/spotify/liked.test.ts",
+        "tests/match/fuzzy.test.ts",
+        "tests/db/tracks.test.ts"
+      ],
+      "depends_on": [
+        "F005",
+        "F006",
+        "F007",
+        "F008",
+        "F009"
+      ],
+      "assigned_to": null,
+      "test_file": "tests/sync/orchestrator.test.ts + tests/providers/spotify/liked.test.ts + tests/match/fuzzy.test.ts + tests/db/tracks.test.ts",
+      "coverage": "src/db/tracks.ts: 100/100/100/100; src/match/fuzzy.ts: 100/100/100/100; src/match/isrc.ts: 98.83/98.03/100/100 (line 68 unchanged from pre-F-015); src/providers/spotify/liked.ts: 100/90.9/100/100; src/sync/orchestrator.ts: 97.7/75/100/97.61. 520/520 unit tests passing (was 503; +17). All 5 TaskCompleted hook stages green.",
+      "notes": "Discovered at deploy time \u2014 first POST /sync/run hit 'Too many subrequests by single Worker invocation' (Workers Free 50/inv cap). Folded in Sprint 6 deferred review M2 + M3 (F-007 fuzzy 7-day cooldown + skipped exclusion). Touched 4 spec files for amendments. Two new sync_state keys: spotify_resume_url + spotify_sweep_max \u2014 implement mid-sweep continuation so backfill of large libraries (>~25 tracks) works without exceeding 50 subrequests. The mid-sweep design preserves I-005 (cursor advance atomic with last fetched page's persistence). Three env vars added: MATCH_BATCH_ISRC, MATCH_BATCH_FUZZY, LIKED_PAGES_PER_RUN (defaults 5/5/1; invalid input falls back to default). Deferred-deploy: live Neon doesn't need migration \u2014 sync_state already has key/value/updated_at columns; new keys are written via existing UPSERT.",
+      "correction_cycles": 2,
+      "scope_expansions": [],
+      "approaches_tried": [
+        "TDD red-green: failed tests for fetchPendingMatchQueue eligibility predicate before implementing; failed tests for resume-URL semantics before bounded fetchLikedSongs",
+        "options-object signature for matchByFuzzy avoided ~50 test call-site updates while accepting the new limit param; preserved positional matchByIsrc since its limit comes from the orchestrator's queue read",
+        "Resume-URL design: spotify_resume_url + spotify_sweep_max persisted in sync_state; cursor advances only on sweep completion (cutoff hit OR Spotify next=null). All three writes share the final-page transaction (I-005)",
+        "readBudget(raw, fallback): NaN/0/negative all fall back to default. Three test cases cover the path"
+      ],
+      "failure_reason": null,
+      "discovered_via": "deploy-time"
     }
   ]
 }

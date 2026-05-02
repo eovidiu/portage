@@ -14,11 +14,11 @@ export interface TidalPlaylist {
   name: string;
 }
 
-// Tidal's add-tracks payload requires `meta.positionBefore` (string) on
-// PlaylistsItemsRelationshipAddOperation_Payload. The OAS doesn't document
-// the semantic — empty string is interpreted here as "append at end" until
-// confirmed against real Tidal traffic during pre-deploy Step 18.
-const APPEND_POSITION = "";
+// Tidal's add-tracks payload accepts an optional `meta.positionBefore` (UUID
+// of an existing item to insert before). 2026-05-02 prod test: sending an
+// empty string returns 400 "must be a valid UUID". Omitting `meta` entirely
+// is accepted and appends to the end of the playlist (verified against the
+// running prod sync after the F-015 cutover).
 
 export interface PlaylistTracksPage {
   trackIds: string[];
@@ -165,7 +165,6 @@ async function _addBatch(
 ): Promise<BatchResult> {
   const body = JSON.stringify({
     data: batch.map((id) => ({ type: "tracks", id })),
-    meta: { positionBefore: APPEND_POSITION },
   });
 
   const first = await tidalFetch(env, playlistTracksUrl(playlistId), {
@@ -196,6 +195,18 @@ async function _interpretBatchResponse(
   if (response.ok) {
     return { added: batch.length, invalidIds: [], errors: 0, aborted: false };
   }
+
+  // Capture body for diagnostic visibility (clone so 400/422 path can re-read)
+  const diag = await response.clone().text().catch(() => "(unreadable body)");
+  console.log(
+    JSON.stringify({
+      event: "playlist_add_batch_failed",
+      status: response.status,
+      batch_size: batch.length,
+      sample_id: batch[0],
+      body: diag.slice(0, 400),
+    }),
+  );
 
   // Check for invalid-track error (400 or 422 with error details)
   if (response.status === 400 || response.status === 422) {

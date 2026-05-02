@@ -111,21 +111,44 @@ function make401Response(): Response {
 }
 
 function setupColdStart() {
-  mockQuery.mockResolvedValueOnce([]);
+  mockQuery.mockResolvedValueOnce([]); // readCursor → cold
+  mockQuery.mockResolvedValueOnce([]); // readState resume_url → null (F-015)
+  mockQuery.mockResolvedValueOnce([]); // readState sweep_max → null (F-015)
 }
 
 function setupCursorAt(ts: string) {
-  mockQuery.mockResolvedValueOnce([{ value: ts }]);
+  mockQuery.mockResolvedValueOnce([{ value: ts }]); // readCursor
+  mockQuery.mockResolvedValueOnce([]); // readState resume_url → null (F-015)
+  mockQuery.mockResolvedValueOnce([]); // readState sweep_max → null (F-015)
 }
 
 // Queue results for txSql calls inside a transaction.
-// The transaction callback calls txSql once per track (RETURNING spotify_id) + once for cursor.
+// F-015: transaction now writes 3 sync_state keys (cursor + resume_url + sweep_max).
 function queueTxResults(trackIds: string[]) {
   txQueryResults.length = 0;
   for (const id of trackIds) {
     txQueryResults.push([{ spotify_id: id }]);
   }
-  txQueryResults.push([]); // cursor UPSERT returns empty
+  txQueryResults.push([]); // cursor UPSERT
+  txQueryResults.push([]); // resume_url UPSERT (F-015)
+  txQueryResults.push([]); // sweep_max UPSERT (F-015)
+}
+
+/** Capture each sync_state write that goes through the transaction. */
+function captureStateWrites(): { writes: Array<[string, string]>; impl: (_sql: string, params: unknown[]) => Promise<unknown[]> } {
+  const writes: Array<[string, string]> = [];
+  return {
+    writes,
+    impl: (_sql: string, params: unknown[]) => {
+      if (typeof _sql === "string" && _sql.includes("INSERT INTO tracks")) {
+        return Promise.resolve([{ spotify_id: (params as string[])[0] }]);
+      }
+      if (typeof _sql === "string" && _sql.includes("sync_state")) {
+        writes.push([(params as string[])[0], (params as string[])[1]]);
+      }
+      return Promise.resolve([]);
+    },
+  };
 }
 
 beforeEach(() => {
@@ -201,8 +224,10 @@ describe("T-005-02: cold start advances cursor to max added_at", () => {
       if ((_sql as string).includes("INSERT INTO tracks")) {
         return Promise.resolve([{ spotify_id: params[0] }]);
       }
-      // cursor UPSERT — capture the value
-      cursorWritten = (params as string[])[1];
+      // F-015: only capture the spotify_cursor key (resume_url + sweep_max also write here)
+      if ((params as string[])[0] === "spotify_cursor") {
+        cursorWritten = (params as string[])[1];
+      }
       return Promise.resolve([]);
     });
 
@@ -626,5 +651,106 @@ describe("T-005-17: 401 mid-pagination triggers refresh and retry", () => {
     const result = await fetchLikedSongs(makeEnv());
     expect(result.tracksInserted).toBe(2);
     expect(vi.mocked(spotifyFetch)).toHaveBeenCalledTimes(2);
+  });
+});
+
+// F-015: bounded pagination + resume URL semantics
+describe("F-015 bounded pagination", () => {
+  it("stops after maxPages and persists page.next as spotify_resume_url; does NOT advance cursor mid-sweep", async () => {
+    setupColdStart();
+
+    const page1 = Array.from({ length: 50 }, (_, i) =>
+      makeTrack(`p1t${i}`, `2026-04-25T07:00:${String(i).padStart(2, "0")}Z`),
+    );
+    // Spotify returns page.next pointing at page 2; we voluntarily stop after 1 page.
+    vi.mocked(spotifyFetch).mockResolvedValueOnce(
+      makeOkResponse(makeSpotifyPage(page1, "https://api.spotify.com/next2")),
+    );
+
+    const cap = captureStateWrites();
+    mockTxSql.mockImplementation(cap.impl);
+
+    const result = await fetchLikedSongs(makeEnv(), 1);
+
+    expect(result.pagesProcessed).toBe(1);
+    expect(result.tracksInserted).toBe(50);
+    expect(result.morePagesPending).toBe(true);
+    expect(vi.mocked(spotifyFetch)).toHaveBeenCalledTimes(1);
+
+    const writesByKey = Object.fromEntries(cap.writes);
+    // mid-sweep: cursor stays cold, resume_url = next, sweep_max = newest of page 1
+    expect(writesByKey["spotify_cursor"]).toBe("1970-01-01T00:00:00Z");
+    expect(writesByKey["spotify_resume_url"]).toBe("https://api.spotify.com/next2");
+    expect(writesByKey["spotify_sweep_max"]).toBe("2026-04-25T07:00:49.000Z");
+  });
+
+  it("resumes from spotify_resume_url when set, ignores LIKED_SONGS_URL default", async () => {
+    // cursor + resume_url set, sweep_max set
+    mockQuery.mockResolvedValueOnce([{ value: "1970-01-01T00:00:00Z" }]);
+    mockQuery.mockResolvedValueOnce([{ value: "https://api.spotify.com/page2" }]);
+    mockQuery.mockResolvedValueOnce([{ value: "2026-04-25T07:00:00.000Z" }]);
+
+    const page2 = [makeTrack("p2t1", "2026-04-24T10:00:00Z")];
+    vi.mocked(spotifyFetch).mockResolvedValueOnce(
+      makeOkResponse(makeSpotifyPage(page2, null)),
+    );
+
+    const cap = captureStateWrites();
+    mockTxSql.mockImplementation(cap.impl);
+
+    const result = await fetchLikedSongs(makeEnv(), 5);
+
+    // The fetch call must have used the resume URL, not LIKED_SONGS_URL
+    const fetchUrl = vi.mocked(spotifyFetch).mock.calls[0][1] as string;
+    expect(fetchUrl).toBe("https://api.spotify.com/page2");
+
+    // page.next === null on page 2 → sweep complete
+    expect(result.morePagesPending).toBe(false);
+    const writesByKey = Object.fromEntries(cap.writes);
+    // sweep complete: cursor advances to sweep_max (preserved from previous invocations); resume_url cleared; sweep_max cleared
+    expect(writesByKey["spotify_cursor"]).toBe("2026-04-25T07:00:00.000Z");
+    expect(writesByKey["spotify_resume_url"]).toBe("");
+    expect(writesByKey["spotify_sweep_max"]).toBe("");
+  });
+
+  it("clears resume_url when cursor cutoff hits mid-sweep (steady state)", async () => {
+    setupCursorAt("2026-04-25T08:00:00Z");
+
+    // page 1 has tracks straddling the cutoff (08:00 - 60s = 07:59:00)
+    const items = [
+      makeTrack("new", "2026-04-25T08:01:00Z"), // newer than cursor → process
+      makeTrack("old", "2026-04-25T07:00:00Z"), // older than cutoff → triggers cutoffHit
+    ];
+    vi.mocked(spotifyFetch).mockResolvedValueOnce(
+      makeOkResponse(makeSpotifyPage(items, "https://api.spotify.com/next")),
+    );
+
+    const cap = captureStateWrites();
+    mockTxSql.mockImplementation(cap.impl);
+
+    const result = await fetchLikedSongs(makeEnv(), 5);
+
+    expect(result.morePagesPending).toBe(false);
+    const writesByKey = Object.fromEntries(cap.writes);
+    expect(writesByKey["spotify_resume_url"]).toBe("");
+    expect(writesByKey["spotify_cursor"]).toBe("2026-04-25T08:01:00.000Z"); // advanced to runMax
+  });
+
+  it("default maxPages is unbounded (preserves prior behavior when caller does not specify)", async () => {
+    setupColdStart();
+
+    const page1 = [makeTrack("a", "2026-04-25T07:00:00Z")];
+    const page2 = [makeTrack("b", "2026-04-24T07:00:00Z")];
+
+    vi.mocked(spotifyFetch)
+      .mockResolvedValueOnce(makeOkResponse(makeSpotifyPage(page1, "https://api.spotify.com/n2")))
+      .mockResolvedValueOnce(makeOkResponse(makeSpotifyPage(page2, null)));
+
+    mockQuery.mockResolvedValueOnce([{ spotify_id: "a" }]);
+    queueTxResults(["b"]);
+
+    const result = await fetchLikedSongs(makeEnv()); // no maxPages
+    expect(result.pagesProcessed).toBe(2);
+    expect(result.morePagesPending).toBe(false);
   });
 });
