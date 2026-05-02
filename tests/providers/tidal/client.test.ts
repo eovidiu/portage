@@ -12,7 +12,7 @@ vi.mock("../../../src/db/oauth_state", () => ({
   purgeExpiredOAuthState: vi.fn(),
 }));
 
-import { tidalFetch } from "../../../src/providers/tidal/client";
+import { tidalFetch, _resetTidalTokenCache } from "../../../src/providers/tidal/client";
 import { loadTokens, persistTokens, markRevoked } from "../../../src/db/provider_tokens";
 import { TidalReauthRequired } from "../../../src/providers/tidal/oauth";
 
@@ -50,6 +50,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockPersistTokens.mockResolvedValue(undefined);
   mockMarkRevoked.mockResolvedValue(undefined);
+  // F-015 cache: ensure each test starts cold so loadTokens mocks are exercised.
+  _resetTidalTokenCache();
 });
 
 // T-003-04: Tidal API calls include required headers
@@ -77,7 +79,7 @@ describe("tidalFetch — required headers (T-003-04)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("includes accept: application/vnd.tidal.v1+json header", async () => {
+  it("includes accept: application/vnd.api+json header (JSON:API)", async () => {
     const env = makeEnv();
     mockLoadTokens.mockResolvedValue(activeTokens());
 
@@ -91,7 +93,7 @@ describe("tidalFetch — required headers (T-003-04)", () => {
     );
 
     await tidalFetch(env as never, "https://openapi.tidal.com/v2/artists/1");
-    expect(capturedRequest?.headers.get("accept")).toBe("application/vnd.tidal.v1+json");
+    expect(capturedRequest?.headers.get("accept")).toBe("application/vnd.api+json");
 
     vi.unstubAllGlobals();
   });
@@ -215,13 +217,14 @@ describe("tidalFetch — 401 retry (T-003-09)", () => {
   });
 });
 
-// T-003-10: Unknown media type returns warning, not crash
-describe("tidalFetch — v2 media type tolerance (T-003-10)", () => {
-  it("logs warning and does not crash on application/vnd.tidal.v2+json response", async () => {
+// 2026-05-02 hotfix: client now sends Accept: application/vnd.api+json
+// for every request and parses JSON:API natively, so the v2-tolerance
+// warning behaviour was removed. Test passes the v2 media type back to
+// confirm we don't crash on legacy/unexpected content types.
+describe("tidalFetch — does not crash on unexpected response Content-Type", () => {
+  it("returns response untouched when content-type is application/vnd.tidal.v2+json", async () => {
     const env = makeEnv();
     mockLoadTokens.mockResolvedValue(activeTokens());
-
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     vi.stubGlobal(
       "fetch",
@@ -236,10 +239,7 @@ describe("tidalFetch — v2 media type tolerance (T-003-10)", () => {
     const res = await tidalFetch(env as never, "https://openapi.tidal.com/v2/artists/1");
 
     expect(res.status).toBe(200);
-    const warnCalls = warnSpy.mock.calls.flat().map(String).join(" ");
-    expect(warnCalls).toContain("vnd.tidal.v2");
 
-    warnSpy.mockRestore();
     vi.unstubAllGlobals();
   });
 });
@@ -357,7 +357,7 @@ describe("tidalFetch — null content-type header", () => {
 });
 
 describe("tidalFetch — POST Content-Type header", () => {
-  it("sets Content-Type: application/vnd.tidal.v1+json for POST requests", async () => {
+  it("sets Content-Type: application/vnd.api+json for POST requests (JSON:API)", async () => {
     const env = makeEnv();
     mockLoadTokens.mockResolvedValue(activeTokens());
 
@@ -375,7 +375,7 @@ describe("tidalFetch — POST Content-Type header", () => {
       body: JSON.stringify({ name: "test" }),
     });
 
-    expect(capturedRequest?.headers.get("Content-Type")).toBe("application/vnd.tidal.v1+json");
+    expect(capturedRequest?.headers.get("Content-Type")).toBe("application/vnd.api+json");
     vi.unstubAllGlobals();
   });
 

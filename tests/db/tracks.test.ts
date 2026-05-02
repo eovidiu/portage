@@ -7,7 +7,13 @@ vi.mock("@neondatabase/serverless", () => ({
   neon: () => mockQuery,
 }));
 
-import { upsertTracks, buildUpsertQueries, countTracks, type TrackRow } from "../../src/db/tracks";
+import {
+  upsertTracks,
+  buildUpsertQueries,
+  countTracks,
+  fetchPendingMatchQueue,
+  type TrackRow,
+} from "../../src/db/tracks";
 
 const makeEnv = (): Env => ({
   DATABASE_URL: "postgresql://test",
@@ -110,5 +116,63 @@ describe("countTracks", () => {
     expect(count).toBe(42);
     const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(sql.toLowerCase()).toContain("count");
+  });
+});
+
+describe("fetchPendingMatchQueue (F-015)", () => {
+  it("returns rows shaped as TrackCandidate (spotify_id, isrc, artist, duration_ms)", async () => {
+    mockQuery.mockResolvedValueOnce([
+      { spotify_id: "a", isrc: "ABC", artist: "Artist", duration_ms: 200000 },
+    ]);
+    const rows = await fetchPendingMatchQueue(makeEnv(), 5);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual({
+      spotify_id: "a",
+      isrc: "ABC",
+      artist: "Artist",
+      duration_ms: 200000,
+    });
+  });
+
+  it("passes limit as the only param", async () => {
+    mockQuery.mockResolvedValueOnce([]);
+    await fetchPendingMatchQueue(makeEnv(), 7);
+    const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(params).toEqual([7]);
+  });
+
+  it("excludes already-matched tracks via LEFT JOIN matches WHERE m.spotify_id IS NULL", async () => {
+    mockQuery.mockResolvedValueOnce([]);
+    await fetchPendingMatchQueue(makeEnv(), 5);
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+    const norm = sql.toLowerCase().replace(/\s+/g, " ");
+    expect(norm).toContain("left join matches m");
+    expect(norm).toContain("m.spotify_id is null");
+  });
+
+  it("excludes skipped unmatched rows and respects 7-day cooldown for pending", async () => {
+    mockQuery.mockResolvedValueOnce([]);
+    await fetchPendingMatchQueue(makeEnv(), 5);
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+    const norm = sql.toLowerCase().replace(/\s+/g, " ");
+    expect(norm).toContain("left join unmatched u");
+    expect(norm).toContain("u.status is null");
+    expect(norm).toContain("u.status = 'pending'");
+    expect(norm).toContain("u.last_attempt_at < now() - interval '7 days'");
+  });
+
+  it("orders by first_seen_at ASC and limits to $1", async () => {
+    mockQuery.mockResolvedValueOnce([]);
+    await fetchPendingMatchQueue(makeEnv(), 5);
+    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+    const norm = sql.toLowerCase().replace(/\s+/g, " ");
+    expect(norm).toContain("order by t.first_seen_at asc");
+    expect(norm).toContain("limit $1");
+  });
+
+  it("returns [] when DB returns no rows (queue empty)", async () => {
+    mockQuery.mockResolvedValueOnce([]);
+    const rows = await fetchPendingMatchQueue(makeEnv(), 5);
+    expect(rows).toEqual([]);
   });
 });

@@ -159,25 +159,44 @@ function rankCandidates(
     });
 }
 
+// F-015 + Sprint 6 review M2/M3: predicate matches fetchPendingMatchQueue in
+// src/db/tracks.ts. Skipped rows never re-enter; pending rows respect a 7-day
+// cooldown. Keep the two SELECTs in sync if either changes.
 async function fetchUnmatchedTracks(
   sql: NeonQueryFunction<false, false>,
+  limit: number,
 ): Promise<SpotifyTrackRow[]> {
   const rows = await sql(
     `SELECT t.spotify_id, t.title, t.artist, t.album, t.duration_ms
      FROM tracks t
      LEFT JOIN matches m ON t.spotify_id = m.spotify_id
-     WHERE m.spotify_id IS NULL`,
-    [],
+     LEFT JOIN unmatched u ON t.spotify_id = u.spotify_id
+     WHERE m.spotify_id IS NULL
+       AND (u.status IS NULL
+            OR (u.status = 'pending'
+                AND u.last_attempt_at < now() - interval '7 days'))
+     ORDER BY t.first_seen_at ASC
+     LIMIT $1`,
+    [limit],
   );
   return rows as SpotifyTrackRow[];
 }
 
+export interface MatchByFuzzyOptions {
+  /** F-015: per-invocation queue cap. Defaults to Number.MAX_SAFE_INTEGER (no cap). */
+  limit?: number;
+  /** F-009: sync_run id for matches.sync_run_id provenance. */
+  syncRunId?: string | null;
+}
+
 export async function matchByFuzzy(
   env: Env,
-  syncRunId: string | null = null,
+  options: MatchByFuzzyOptions = {},
 ): Promise<FuzzyMatchResult> {
+  const limit = options.limit ?? Number.MAX_SAFE_INTEGER;
+  const syncRunId = options.syncRunId ?? null;
   const sql = neon(env.DATABASE_URL);
-  const tracks = await fetchUnmatchedTracks(sql);
+  const tracks = await fetchUnmatchedTracks(sql, limit);
 
   let matched = 0;
   let unmatched = 0;

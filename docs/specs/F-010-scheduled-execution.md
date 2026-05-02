@@ -126,3 +126,24 @@ Content-Type: application/json
 - A manually-triggered run produces a valid `sync_runs` row identical in structure to a cron-triggered run
 - Disabling the cron, then re-enabling after 24 hours, results in a single catch-up run that processes all likes from the gap
 - A 409 is returned if a second `POST /sync/run` arrives while a first is in progress
+
+## Amendment 2026-05-02 (F-015): operational guidance for backfill vs steady state
+
+Steady-state cron schedule (`23 7 * * *`, `23 19 * * *` UTC) processes ~5 new
+tracks per invocation, well within the Workers Free 50-subrequest cap.
+
+For BACKFILL of a historical Liked Songs library, a cron-every-15-minutes
+schedule drains the queue without exceeding Free-tier limits. Procedure:
+
+1. Edit `wrangler.toml`: set `crons = ["*/15 * * * *"]`
+2. `npx wrangler deploy`
+3. Wait until `tracks.count − unmatched.count(status='skipped') ≈ matches.count`
+   (verify via SQL on Neon)
+4. Edit `wrangler.toml` back to `["23 7 * * *", "23 19 * * *"]`
+5. `npx wrangler deploy`
+
+Backfill duration estimate: `tracks_total / MATCH_BATCH_ISRC` invocations,
+multiplied by the cron interval. For 1000 tracks at 5/run with 15-min cron,
+~50 hours of unattended operation. The mid-sweep `spotify_resume_url`
+state (F-005 amendment) ensures Spotify pagination resumes between invocations
+without re-fetching processed pages.

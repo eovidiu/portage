@@ -6,13 +6,16 @@ compatibility_flags = ["nodejs_compat"]
 account_id = "dc223a5a0db5a99a0ba194aff0c98c58"
 
 routes = [
-  { pattern = "portage.eovidiu.co.uk/*", zone_id = "136764234985fbfbd0b14286b7bc34e1" }
+  { pattern = "portage.eovidiu.co.uk", custom_domain = true }
 ]
 
-# 07:23 UTC (08:23 BST / 09:23 EEST) and 19:23 UTC (20:23 BST / 21:23 EEST)
+# Backfill mode: every 15 minutes. Revert to ["23 7 * * *", "23 19 * * *"] (2x daily UTC)
+# once tracks count ≈ matches + skipped-unmatched (queue drained) per F-010 amendment.
 [triggers]
-crons = ["23 7 * * *", "23 19 * * *"]
+crons = ["*/15 * * * *"]
 
 [vars]
 TIDAL_COUNTRY_CODE = "RO"
 TIDAL_PLAYLIST_TITLE = "Spotify Liked"
+SPOTIFY_REDIRECT_URI = "https://portage.eovidiu.co.uk/auth/spotify/callback"
+TIDAL_REDIRECT_URI = "https://portage.eovidiu.co.uk/auth/tidal/callback"

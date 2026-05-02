@@ -492,7 +492,7 @@ describe("matchByFuzzy — syncRunId", () => {
   it("passes syncRunId to insertMatch", async () => {
     mockTidalFetch.mockResolvedValueOnce(tidalSearchOk([makeTidalTrack()]));
 
-    await matchByFuzzy(makeEnv(), "run-abc");
+    await matchByFuzzy(makeEnv(), { syncRunId: "run-abc" });
 
     const insertCall = mockSql.mock.calls.find(
       ([q]: [string]) => typeof q === "string" && q.includes("INSERT INTO matches"),
@@ -762,5 +762,45 @@ describe("matchByFuzzy — sort tie-break path", () => {
       ([q]: [string]) => typeof q === "string" && q.includes("INSERT INTO matches"),
     );
     expect(insertCall).toBeDefined();
+  });
+});
+
+// F-015: bounded queue + 7-day cooldown predicate (closes Sprint 6 M2/M3)
+describe("matchByFuzzy — bounded queue (F-015)", () => {
+  it("passes limit to the SELECT as $1", async () => {
+    mockSql.mockReset();
+    mockSql.mockResolvedValueOnce([]).mockResolvedValue([]);
+    await matchByFuzzy(makeEnv(), { limit: 3 });
+    const [sql, params] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(sql.toLowerCase()).toContain("limit $1");
+    expect(params).toEqual([3]);
+  });
+
+  it("LEFT JOINs unmatched and applies skipped exclusion + 7-day cooldown", async () => {
+    mockSql.mockReset();
+    mockSql.mockResolvedValueOnce([]).mockResolvedValue([]);
+    await matchByFuzzy(makeEnv(), { limit: 5 });
+    const [sql] = mockSql.mock.calls[0] as [string, unknown[]];
+    const norm = sql.toLowerCase().replace(/\s+/g, " ");
+    expect(norm).toContain("left join unmatched u");
+    expect(norm).toContain("u.status is null");
+    expect(norm).toContain("u.status = 'pending'");
+    expect(norm).toContain("u.last_attempt_at < now() - interval '7 days'");
+  });
+
+  it("orders by first_seen_at ASC for fair queue draining", async () => {
+    mockSql.mockReset();
+    mockSql.mockResolvedValueOnce([]).mockResolvedValue([]);
+    await matchByFuzzy(makeEnv(), { limit: 5 });
+    const [sql] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(sql.toLowerCase().replace(/\s+/g, " ")).toContain("order by t.first_seen_at asc");
+  });
+
+  it("defaults to Number.MAX_SAFE_INTEGER when no limit option provided", async () => {
+    mockSql.mockReset();
+    mockSql.mockResolvedValueOnce([]).mockResolvedValue([]);
+    await matchByFuzzy(makeEnv());
+    const [, params] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(params).toEqual([Number.MAX_SAFE_INTEGER]);
   });
 });

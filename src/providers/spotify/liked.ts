@@ -6,21 +6,32 @@
 // Stops paginating once a track's `added_at` is at or before `cursor - 60s` (R11 clock-skew tolerance).
 //
 // Atomicity (I-005 / F-005-R6): non-final pages are persisted without touching
-// the cursor. The final page's inserts and cursor advance are in a single
-// @neondatabase/serverless transaction (sync-callback array form) so a partial
-// run never advances the cursor.
+// sync_state. The last page of THIS invocation's inserts and ALL sync_state
+// writes (cursor + resume URL + sweep max) are batched into a single
+// @neondatabase/serverless transaction so a partial run never advances state.
+//
+// F-015: bounded per invocation. `maxPages` caps subrequests for Workers Free
+// (default Number.POSITIVE_INFINITY = unbounded for back-compat). When we stop
+// voluntarily mid-sweep (page.next != null but pagesFetched >= maxPages), the
+// next page URL is persisted in sync_state.spotify_resume_url so the next
+// invocation continues where this one left off without re-fetching processed
+// pages. The cursor only advances when a sweep COMPLETES (cutoff hit OR
+// page.next === null); during the sweep, sweep_max accumulates the newest
+// added_at across invocations.
 //
 // 401 handling: delegates to spotifyFetch from oauth.ts (coalesced refresh + retry).
 
 import { neon } from "@neondatabase/serverless";
 import { spotifyFetch } from "./oauth";
 import { buildUpsertQueries, upsertTracks, type TrackRow } from "../../db/tracks";
-import { readCursor, buildCursorQuery } from "../../db/sync_state";
+import { readCursor, readState, buildCursorQuery } from "../../db/sync_state";
 import type { Env } from "../../env";
 
 // Verified: 2026-04-27 against https://developer.spotify.com/documentation/web-api/reference/get-users-saved-tracks (path /v1/me/tracks, max page size = 50).
 const LIKED_SONGS_URL = "https://api.spotify.com/v1/me/tracks?limit=50";
 const CURSOR_KEY = "spotify_cursor";
+const RESUME_URL_KEY = "spotify_resume_url";
+const SWEEP_MAX_KEY = "spotify_sweep_max";
 const CLOCK_SKEW_MS = 60_000;
 
 interface SpotifyTrack {
@@ -48,6 +59,8 @@ export interface FetchResult {
   pagesProcessed: number;
   tracksInserted: number;
   tracksSkipped: number;
+  /** F-015: true when more pages remain in the current sweep after this invocation. */
+  morePagesPending: boolean;
 }
 
 async function fetchPage(env: Env, url: string): Promise<SpotifyTracksPage> {
@@ -95,24 +108,33 @@ function toTrackRow(item: SpotifyPageItem): TrackRow {
   };
 }
 
-export async function fetchLikedSongs(env: Env): Promise<FetchResult> {
+export async function fetchLikedSongs(
+  env: Env,
+  maxPages: number = Number.POSITIVE_INFINITY,
+): Promise<FetchResult> {
   const cursor = await readCursor(env, CURSOR_KEY);
   const cutoff = new Date(new Date(cursor).getTime() - CLOCK_SKEW_MS);
 
   const db = neon(env.DATABASE_URL);
+  const resumeUrlRaw = await readState(db, RESUME_URL_KEY);
+  const sweepMaxRaw = await readState(db, SWEEP_MAX_KEY);
+  const resumeUrl = resumeUrlRaw && resumeUrlRaw.length > 0 ? resumeUrlRaw : null;
+  const sweepMaxBefore = sweepMaxRaw && sweepMaxRaw.length > 0 ? sweepMaxRaw : null;
 
-  let url: string | null = LIKED_SONGS_URL;
+  let url: string | null = resumeUrl ?? LIKED_SONGS_URL;
   let totalInserted = 0;
   let totalSkipped = 0;
-  let maxAddedAt: Date | null = null;
+  let runMaxAddedAt: Date | null = null;
+  let pagesFetched = 0;
+  let cutoffHit = false;
+  let lastPageNext: string | null = null;
 
-  // Collect all pages first so we can identify the final page for atomic cursor advance.
-  // Any fetch error propagates immediately — partial collections do not persist anything.
   const allPages: Array<{ tracks: TrackRow[]; skipped: number }> = [];
-  let stopPagination = false;
 
-  while (url !== null && !stopPagination) {
+  while (url !== null && pagesFetched < maxPages && !cutoffHit) {
     const page = await fetchPage(env, url);
+    pagesFetched++;
+    lastPageNext = page.next;
 
     const tracksForPage: TrackRow[] = [];
     let skippedOnPage = 0;
@@ -127,37 +149,59 @@ export async function fetchLikedSongs(env: Env): Promise<FetchResult> {
 
       // R5 + R11: stop once we see a track at or before cursor - 60s
       if (addedAt <= cutoff) {
-        stopPagination = true;
+        cutoffHit = true;
         break;
       }
 
       tracksForPage.push(toTrackRow(item));
 
-      if (maxAddedAt === null || addedAt > maxAddedAt) {
-        maxAddedAt = addedAt;
+      if (runMaxAddedAt === null || addedAt > runMaxAddedAt) {
+        runMaxAddedAt = addedAt;
       }
     }
 
     allPages.push({ tracks: tracksForPage, skipped: skippedOnPage });
-    url = stopPagination ? null : (page.next ?? null);
+    if (cutoffHit) break;
+    url = page.next;
   }
 
-  // Persist all pages. The final page's inserts are atomic with the cursor advance (I-005).
+  // Determine sweep state after this invocation.
+  // Sweep completes when (a) we hit the cursor cutoff, or (b) Spotify returned
+  // page.next === null on the last fetched page. Otherwise we voluntarily
+  // stopped mid-sweep (maxPages budget) — persist the next URL for resumption.
+  const sweepComplete = cutoffHit || lastPageNext === null;
+  const newResumeUrl = sweepComplete ? "" : (lastPageNext ?? "");
+
+  // sweep_max accumulates across invocations of one sweep. The cursor only
+  // advances when the sweep completes.
+  let newSweepMax: string;
+  if (runMaxAddedAt === null) {
+    newSweepMax = sweepMaxBefore ?? "";
+  } else if (sweepMaxBefore === null) {
+    newSweepMax = runMaxAddedAt.toISOString();
+  } else {
+    const prev = new Date(sweepMaxBefore);
+    newSweepMax = runMaxAddedAt > prev ? runMaxAddedAt.toISOString() : sweepMaxBefore;
+  }
+
+  const newCursor = sweepComplete && newSweepMax.length > 0 ? newSweepMax : cursor;
+  // After sweep completes, clear sweep_max so the next sweep starts fresh.
+  const newSweepMaxToPersist = sweepComplete ? "" : newSweepMax;
+
+  // Persist all pages. The last page of this invocation's inserts are atomic
+  // with the sync_state writes (I-005).
   for (let i = 0; i < allPages.length; i++) {
     const { tracks, skipped } = allPages[i];
     const isLastPage = i === allPages.length - 1;
     let inserted: number;
 
-    if (isLastPage && maxAddedAt !== null) {
-      // C1 fix: sync-callback array form required by @neondatabase/serverless transaction API
-      // Each txSql(...) call returns an un-awaited NeonQueryInTransaction; driver executes them atomically.
-      const newCursor = maxAddedAt.toISOString();
+    if (isLastPage) {
       const results = await db.transaction((txSql) => [
         ...buildUpsertQueries(txSql, tracks),
         buildCursorQuery(txSql, CURSOR_KEY, newCursor),
+        buildCursorQuery(txSql, RESUME_URL_KEY, newResumeUrl),
+        buildCursorQuery(txSql, SWEEP_MAX_KEY, newSweepMaxToPersist),
       ]);
-      // results is QueryRows[][]; each upsert returns RETURNING rows (0 or 1 row per insert).
-      // The last result is the cursor UPSERT — skip it for the insert count.
       const upsertResults = results.slice(0, tracks.length);
       inserted = upsertResults.filter((r) => (r as Record<string, unknown>[]).length > 0).length;
     } else {
@@ -180,5 +224,6 @@ export async function fetchLikedSongs(env: Env): Promise<FetchResult> {
     pagesProcessed: allPages.length,
     tracksInserted: totalInserted,
     tracksSkipped: totalSkipped,
+    morePagesPending: !sweepComplete,
   };
 }

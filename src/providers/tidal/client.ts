@@ -2,26 +2,54 @@ import type { Env } from "../../env";
 import { loadTokens } from "../../db/provider_tokens";
 import { refreshTokens, needsRefresh, TidalReauthRequired } from "./oauth";
 
-const TIDAL_V1_ACCEPT = "application/vnd.tidal.v1+json";
-const TIDAL_V2_ACCEPT = "application/vnd.tidal.v2+json";
+// Verified: 2026-05-02 against tidal-api-oas.json — every /v2 operation
+// returns application/vnd.api+json (JSON:API standard). The legacy
+// vnd.tidal.v1+json was sent by every client request previously and Tidal
+// responded 406 to /v2 endpoints, surfacing as 100% match-stage errors on
+// first prod sync.
+const TIDAL_JSONAPI_ACCEPT = "application/vnd.api+json";
+
+// F-015: per-invocation token cache. Each loadTokens call is a Neon HTTP
+// subrequest; with 5+5 match-stage calls plus playlist writes, the unbounded
+// version was burning ~12 subrequests on token reloads alone. The cache lives
+// at module scope (warm-isolate persistence) and is invalidated when needsRefresh
+// fires; refreshTokens then reloads + re-caches.
+let cachedTokens: { accessToken: string; refreshToken: string; expiresAt: Date } | null = null;
+
+async function getCachedTokens(env: Env) {
+  if (cachedTokens && !needsRefresh(cachedTokens.expiresAt)) {
+    return cachedTokens;
+  }
+  const tokens = await loadTokens(env, "tidal");
+  if (!tokens) {
+    cachedTokens = null;
+    throw new TidalReauthRequired();
+  }
+  if (needsRefresh(tokens.expiresAt)) {
+    await refreshTokens(env);
+    const fresh = await loadTokens(env, "tidal");
+    if (!fresh) {
+      cachedTokens = null;
+      throw new TidalReauthRequired();
+    }
+    cachedTokens = fresh;
+    return fresh;
+  }
+  cachedTokens = tokens;
+  return tokens;
+}
+
+/** Internal: invalidate the cache so the next call refetches. Test helper. */
+export function _resetTidalTokenCache(): void {
+  cachedTokens = null;
+}
 
 export async function tidalFetch(
   env: Env,
   path: string,
   options: RequestInit = {}
 ): Promise<Response> {
-  let tokens = await loadTokens(env, "tidal");
-  if (!tokens) {
-    throw new TidalReauthRequired();
-  }
-
-  if (needsRefresh(tokens.expiresAt)) {
-    await refreshTokens(env);
-    tokens = await loadTokens(env, "tidal");
-    if (!tokens) {
-      throw new TidalReauthRequired();
-    }
-  }
+  const tokens = await getCachedTokens(env);
 
   const countryCode = env.TIDAL_COUNTRY_CODE || "RO";
   const url = new URL(path);
@@ -30,12 +58,14 @@ export async function tidalFetch(
   const response = await _tidalRequest(url.toString(), tokens.accessToken, options);
 
   if (response.status === 401) {
+    cachedTokens = null;
     await refreshTokens(env);
-    tokens = await loadTokens(env, "tidal");
-    if (!tokens) {
+    const fresh = await loadTokens(env, "tidal");
+    if (!fresh) {
       throw new TidalReauthRequired();
     }
-    return _tidalRequest(url.toString(), tokens.accessToken, options);
+    cachedTokens = fresh;
+    return _tidalRequest(url.toString(), fresh.accessToken, options);
   }
 
   return response;
@@ -48,18 +78,11 @@ async function _tidalRequest(
 ): Promise<Response> {
   const headers = new Headers(options.headers);
   headers.set("Authorization", `Bearer ${accessToken}`);
-  headers.set("accept", TIDAL_V1_ACCEPT);
+  headers.set("accept", TIDAL_JSONAPI_ACCEPT);
   if (options.method && options.method !== "GET" && options.method !== "HEAD") {
-    headers.set("Content-Type", TIDAL_V1_ACCEPT);
+    headers.set("Content-Type", TIDAL_JSONAPI_ACCEPT);
   }
 
   const request = new Request(url, { ...options, headers });
-  const response = await fetch(request);
-
-  const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes(TIDAL_V2_ACCEPT.split(";")[0])) {
-    console.warn(`Tidal returned vnd.tidal.v2+json from ${url}; parsing as v1 best-effort`);
-  }
-
-  return response;
+  return fetch(request);
 }
