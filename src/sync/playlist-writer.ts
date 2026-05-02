@@ -1,6 +1,6 @@
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 import type { Env } from "../env";
-import { createPlaylist, getPlaylist, getAllPlaylistTrackIds, addTracksToPlaylist } from "../providers/tidal/playlist";
+import { createPlaylist, getPlaylist, addTracksToPlaylist } from "../providers/tidal/playlist";
 import { selectMatchesNewerThan, flagInvalidTidalId } from "../db/matches";
 import { readState, writeState } from "../db/sync_state";
 import { requeueForInvalidTidalId } from "../db/unmatched";
@@ -50,7 +50,22 @@ async function ensurePlaylist(
   return newId;
 }
 
-/** Run the full playlist write pass for the current sync. */
+/**
+ * Run the full playlist write pass for the current sync.
+ *
+ * 2026-05-02 simplification: previously read full playlist contents via
+ * `getAllPlaylistTrackIds` to dedupe before writing. That paginated read
+ * grew with playlist size and Tidal rate-limited the GET on every cron
+ * (HTTP 429), throwing inside writePlaylist, which left the watermark
+ * frozen and the queue stuck. The watermark itself already prevents
+ * double-writes in steady state: each match is selected exactly once
+ * (`matched_at > last_write_at`), and the watermark advances atomically
+ * after each successful invocation. Trade-off: a worker crash AFTER the
+ * Tidal POST returns and BEFORE the watermark write could re-enqueue
+ * already-written matches on the next run. For this single-tenant tool
+ * the duplicate window is acceptable; manual cleanup is trivial if it
+ * ever surfaces.
+ */
 export async function writePlaylist(env: Env): Promise<PlaylistWriteResult> {
   const sql = neon(env.DATABASE_URL) as NeonQueryFunction<false, false>;
 
@@ -63,36 +78,27 @@ export async function writePlaylist(env: Env): Promise<PlaylistWriteResult> {
     return { playlistId, added: 0, skippedDuplicates: 0, invalidIds: [], errors: 0 };
   }
 
-  const existingIds = await getAllPlaylistTrackIds(env, playlistId);
-
-  const toAdd = newMatches.filter((m) => !existingIds.has(m.tidal_id));
-  const skippedDuplicates = newMatches.length - toAdd.length;
-
-  if (toAdd.length === 0) {
-    return { playlistId, added: 0, skippedDuplicates, invalidIds: [], errors: 0 };
-  }
-
-  const tidalIds = toAdd.map((m) => m.tidal_id);
+  const tidalIds = newMatches.map((m) => m.tidal_id);
   const result = await addTracksToPlaylist(env, playlistId, tidalIds);
 
   // Handle invalid track ids: flag in matches + requeue to unmatched
   for (const tidalId of result.invalidIds) {
     await flagInvalidTidalId(sql, tidalId);
-    // Find the spotify_id for this tidal_id from our newMatches list
     const match = newMatches.find((m) => m.tidal_id === tidalId);
     if (match) {
       await requeueForInvalidTidalId(sql, match.spotify_id);
     }
   }
 
-  // Advance the watermark only on overall success (even partial writes advance it
-  // so that successfully-added tracks are not retried; deduplication handles safety)
+  // Advance the watermark on any successful return from addTracksToPlaylist
+  // (even partial writes — the per-batch loop never throws). The watermark
+  // is the sole gate against re-write next run.
   await writeState(sql, KEY_LAST_WRITE_AT, new Date().toISOString());
 
   return {
     playlistId,
     added: result.added,
-    skippedDuplicates,
+    skippedDuplicates: 0,
     invalidIds: result.invalidIds,
     errors: result.errors,
   };
