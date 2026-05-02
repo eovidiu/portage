@@ -315,12 +315,12 @@ describe("addTracksToPlaylist — request body shape (OAS-grounded)", () => {
     expect(BATCH_SIZE).toBeGreaterThan(0);
   });
 
-  it("body has top-level meta.positionBefore (required string per OAS)", async () => {
+  it("body omits meta entirely (append-at-end semantic; 2026-05-02 prod fix)", async () => {
     mockTidalFetch.mockResolvedValueOnce(ok({}));
     await addTracksToPlaylist(makeEnv(), "PL1", ["T1", "T2"]);
     const call = mockTidalFetch.mock.calls[0];
     const body = JSON.parse(call[2].body as string);
-    expect(typeof body.meta?.positionBefore).toBe("string");
+    expect(body.meta).toBeUndefined();
   });
 
   it("data items have type='tracks' and id (Resource_Identifier shape)", async () => {
