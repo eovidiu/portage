@@ -9,7 +9,6 @@ vi.mock("@neondatabase/serverless", () => ({
 vi.mock("../../src/providers/tidal/playlist", () => ({
   createPlaylist: vi.fn(),
   getPlaylist: vi.fn(),
-  getAllPlaylistTrackIds: vi.fn(),
   addTracksToPlaylist: vi.fn(),
 }));
 
@@ -17,13 +16,11 @@ import { writePlaylist } from "../../src/sync/playlist-writer";
 import {
   createPlaylist,
   getPlaylist,
-  getAllPlaylistTrackIds,
   addTracksToPlaylist,
 } from "../../src/providers/tidal/playlist";
 
 const mockCreate = createPlaylist as ReturnType<typeof vi.fn>;
 const mockGet = getPlaylist as ReturnType<typeof vi.fn>;
-const mockGetAll = getAllPlaylistTrackIds as ReturnType<typeof vi.fn>;
 const mockAdd = addTracksToPlaylist as ReturnType<typeof vi.fn>;
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
@@ -93,7 +90,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockCreate.mockResolvedValue("PLAYLIST_X");
   mockGet.mockResolvedValue({ id: "PLAYLIST_X", name: "Spotify Liked" });
-  mockGetAll.mockResolvedValue(new Set<string>());
   mockAdd.mockResolvedValue({ added: 0, invalidIds: [], errors: 0 });
 });
 
@@ -197,7 +193,6 @@ describe("T-008-06: New matches appended", () => {
     ];
     setupExistingPlaylist("PL1", matches);
     mockGet.mockResolvedValue({ id: "PL1", name: "Spotify Liked" });
-    mockGetAll.mockResolvedValue(new Set<string>());
     mockAdd.mockResolvedValue({ added: 5, invalidIds: [], errors: 0 });
 
     await writePlaylist(makeEnv());
@@ -207,9 +202,11 @@ describe("T-008-06: New matches appended", () => {
   });
 });
 
-// T-008-07: Already-present tracks not re-added
-describe("T-008-07: Already-present tracks not re-added", () => {
-  it("filters out tidal_ids already in the playlist", async () => {
+// T-008-07: 2026-05-02 simplification — no client-side dedupe.
+// Watermark `last_playlist_write_at` is the sole gate; client-side dedupe
+// via getAllPlaylistTrackIds was rate-limited by Tidal and removed.
+describe("T-008-07: writePlaylist sends every match without client-side dedupe", () => {
+  it("forwards all newMatches.tidal_id to addTracksToPlaylist verbatim", async () => {
     const matches = [
       makeMatch("sp1", "T1"),
       makeMatch("sp3", "T3"),
@@ -217,14 +214,13 @@ describe("T-008-07: Already-present tracks not re-added", () => {
     ];
     setupExistingPlaylist("PL1", matches);
     mockGet.mockResolvedValue({ id: "PL1", name: "Spotify Liked" });
-    mockGetAll.mockResolvedValue(new Set(["T1", "T2"])); // T1 already present
-    mockAdd.mockResolvedValue({ added: 2, invalidIds: [], errors: 0 });
+    mockAdd.mockResolvedValue({ added: 3, invalidIds: [], errors: 0 });
 
     const result = await writePlaylist(makeEnv());
 
     const [, , addedIds] = mockAdd.mock.calls[0];
-    expect(addedIds).toEqual(["T3", "T4"]);
-    expect(result.skippedDuplicates).toBe(1);
+    expect(addedIds).toEqual(["T1", "T3", "T4"]);
+    expect(result.skippedDuplicates).toBe(0);
   });
 });
 
@@ -247,7 +243,6 @@ describe("T-008-09: Batch size respects configured limit", () => {
     );
     setupExistingPlaylist("PL1", matches);
     mockGet.mockResolvedValue({ id: "PL1", name: "Spotify Liked" });
-    mockGetAll.mockResolvedValue(new Set<string>());
     mockAdd.mockResolvedValue({ added: 120, invalidIds: [], errors: 0 });
 
     await writePlaylist(makeEnv());
@@ -267,25 +262,22 @@ describe("T-008-10: Idempotent on partial failure", () => {
     );
     setupExistingPlaylist("PL1", matches);
     mockGet.mockResolvedValue({ id: "PL1", name: "Spotify Liked" });
-    mockGetAll.mockResolvedValue(new Set<string>());
     mockAdd.mockResolvedValue({ added: 5, invalidIds: [], errors: 0 });
 
     await writePlaylist(makeEnv());
 
-    // Second run: same matches, but T0-T4 already in playlist
+    // Second run: watermark advanced, selectMatchesNewerThan returns []
     mockSql.mockReset();
     mockSql.mockResolvedValueOnce([{ value: "PL1" }]);
-    mockSql.mockResolvedValueOnce([{ value: "2026-01-01T00:00:00Z" }]);
-    mockSql.mockResolvedValueOnce(matches);
+    mockSql.mockResolvedValueOnce([{ value: new Date().toISOString() }]);
+    mockSql.mockResolvedValueOnce([]);
     mockSql.mockResolvedValue([]);
-    mockGetAll.mockResolvedValue(new Set(["T0", "T1", "T2", "T3", "T4"]));
     mockAdd.mockClear();
 
     const result2 = await writePlaylist(makeEnv());
 
-    // All already present — addTracksToPlaylist not called
     expect(mockAdd).not.toHaveBeenCalled();
-    expect(result2.skippedDuplicates).toBe(5);
+    expect(result2.added).toBe(0);
   });
 });
 
@@ -295,7 +287,6 @@ describe("T-008-11: 401 handled by tidalFetch", () => {
     const matches = [makeMatch("sp1", "T1")];
     setupExistingPlaylist("PL1", matches);
     mockGet.mockResolvedValue({ id: "PL1", name: "Spotify Liked" });
-    mockGetAll.mockResolvedValue(new Set<string>());
     mockAdd.mockResolvedValue({ added: 1, invalidIds: [], errors: 0 });
 
     const result = await writePlaylist(makeEnv());
@@ -311,7 +302,6 @@ describe("T-008-12: Invalid Tidal id flagged and re-queued", () => {
     const matches = [makeMatch("sp-bad", "T_BAD")];
     setupExistingPlaylist("PL1", matches);
     mockGet.mockResolvedValue({ id: "PL1", name: "Spotify Liked" });
-    mockGetAll.mockResolvedValue(new Set<string>());
     mockAdd.mockResolvedValue({ added: 0, invalidIds: ["T_BAD"], errors: 0 });
 
     const result = await writePlaylist(makeEnv());
@@ -347,7 +337,6 @@ describe("T-008-13: last_playlist_write_at advanced after success", () => {
     const matches = [makeMatch("sp1", "T1")];
     setupExistingPlaylist("PL1", matches);
     mockGet.mockResolvedValue({ id: "PL1", name: "Spotify Liked" });
-    mockGetAll.mockResolvedValue(new Set<string>());
     mockAdd.mockResolvedValue({ added: 1, invalidIds: [], errors: 0 });
 
     await writePlaylist(makeEnv());
@@ -383,7 +372,6 @@ describe("writePlaylist — invalid tidalId with no match in newMatches", () => 
     const matches = [makeMatch("sp1", "T1")];
     setupExistingPlaylist("PL1", matches);
     mockGet.mockResolvedValue({ id: "PL1", name: "Spotify Liked" });
-    mockGetAll.mockResolvedValue(new Set<string>());
     // Return an invalidId that doesn't exist in matches (covers the if(match) false branch)
     mockAdd.mockResolvedValue({ added: 0, invalidIds: ["T_UNKNOWN"], errors: 0 });
 
@@ -405,7 +393,6 @@ describe("T-008-14: No removals during normal sync", () => {
   it("does not call any delete/remove endpoint on playlist", async () => {
     setupExistingPlaylist("PL1", [makeMatch("sp1", "T1")]);
     mockGet.mockResolvedValue({ id: "PL1", name: "Spotify Liked" });
-    mockGetAll.mockResolvedValue(new Set(["T99", "T100"])); // tracks not in matches
     mockAdd.mockResolvedValue({ added: 1, invalidIds: [], errors: 0 });
 
     await writePlaylist(makeEnv());
