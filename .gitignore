@@ -25,3 +25,6 @@ coverage/
 # Logs
 *.log
 npm-debug.log*
+
+# Local operational dumps
+unmatched-review.md
