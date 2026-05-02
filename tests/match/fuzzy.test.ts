@@ -323,7 +323,7 @@ describe("T-007-13: per-decision log line emitted for each track", () => {
 });
 
 describe("matchByFuzzy — request URL shape", () => {
-  it("uses /searchResults camelCase, includes tracks+artists+albums, no limit param", async () => {
+  it("uses /searchResults camelCase, compound include paths for nested artists/albums, no limit param", async () => {
     mockTidalFetch.mockResolvedValueOnce(tidalSearchOk([makeTidalTrack()]));
 
     await matchByFuzzy(makeEnv());
@@ -331,9 +331,11 @@ describe("matchByFuzzy — request URL shape", () => {
     const [, path] = mockTidalFetch.mock.calls[0] as [Env, string];
     expect(path).toContain("/v2/searchResults/");
     expect(path).not.toContain("/v2/searchresults/"); // lowercase form is wrong
+    // 2026-05-02 prod fix: tracks.artists + tracks.albums (compound include
+    // paths) — bare `artists,albums` returned tracks but no track→artist refs.
     expect(path).toContain("include=tracks");
-    expect(path).toContain("artists");
-    expect(path).toContain("albums");
+    expect(path).toContain("tracks.artists");
+    expect(path).toContain("tracks.albums");
     expect(path).not.toContain("limit=");
     expect(path).not.toContain("/relationships/tracks"); // we now use the singular endpoint
   });

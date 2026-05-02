@@ -30,6 +30,14 @@ import type { Env } from "../env";
  * at 5 candidates; we slice client-side from `relationships.tracks.data[]`.
  */
 // Verified: 2026-04-27 against https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json (path /v2/searchResults/{id} GET, camelCase; include enum allows tracks,artists,albums; data is SearchResults_Resource_Object).
+// 2026-05-02 prod fix: bare `include=tracks,artists,albums` returns tracks in
+// included[] but NOT the artists/albums of those tracks (those are siblings of
+// the searchResults resource, not children of its track relationships). For
+// the matcher's per-candidate artist/album resolution we need compound include
+// paths `tracks.artists` and `tracks.albums` per JSON:API §6.2 (relationship
+// path traversal). Without these, every candidate had primaryArtist=""
+// /albumTitle="" → artistScore=0/albumScore=0 → max possible total 0.60,
+// guaranteed-below-0.85 threshold → 100% fuzzy rejection rate.
 const TIDAL_SEARCH_BASE = "https://openapi.tidal.com/v2/searchResults";
 
 const ACCEPT_THRESHOLD = 0.85;
@@ -65,7 +73,7 @@ async function searchTidal(
   query: string,
 ): Promise<{ response: Response; retried: boolean }> {
   const encoded = encodeURIComponent(query);
-  const url = `${TIDAL_SEARCH_BASE}/${encoded}?include=tracks,artists,albums`;
+  const url = `${TIDAL_SEARCH_BASE}/${encoded}?include=tracks,tracks.artists,tracks.albums`;
   const first = await tidalFetch(env, url);
   if (first.status !== 429) return { response: first, retried: false };
 

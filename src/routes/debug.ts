@@ -71,7 +71,7 @@ debugRoutes.get("/match-trace/:spotify_id", async (c) => {
   }
 
   const fuzzyQuery = `${normaliseTitle(track.artist)} ${normaliseTitle(track.title)}`;
-  const fuzzyUrl = `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(fuzzyQuery)}?include=tracks,artists,albums`;
+  const fuzzyUrl = `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(fuzzyQuery)}?include=tracks,tracks.artists,tracks.albums`;
   const fr = await tidalFetch(c.env, fuzzyUrl);
   if (!fr.ok) {
     trace.fuzzy = { query: fuzzyQuery, url: fuzzyUrl, status: fr.status, body: await fr.text() };
