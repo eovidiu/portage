@@ -2,7 +2,7 @@
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
   "total_features": 18,
-  "passing": 17,
+  "passing": 18,
   "features": [
     {
       "id": "F014",
@@ -552,7 +552,7 @@
       "test_spec": null,
       "description": "Bounded per-invocation orchestrator + Spotify page budget + fuzzy queue cooldown for Cloudflare Workers Free 50-subrequest cap",
       "priority": 5,
-      "status": "in-progress",
+      "status": "passing",
       "scope": [
         "src/sync/orchestrator.ts",
         "src/providers/spotify/liked.ts",
@@ -573,13 +573,18 @@
         "F008",
         "F009"
       ],
-      "assigned_to": "single-session",
-      "test_file": null,
-      "coverage": null,
-      "notes": "Discovered at deploy time \u2014 first POST /sync/run hit 'Too many subrequests by single Worker invocation' (Workers Free 50/inv cap). Folds in Sprint 6 deferred review M2 + M3 (F-007 fuzzy 7-day cooldown + skipped exclusion) since the same SQL is being touched. Touches 4 spec files for amendments.",
+      "assigned_to": null,
+      "test_file": "tests/sync/orchestrator.test.ts + tests/providers/spotify/liked.test.ts + tests/match/fuzzy.test.ts + tests/db/tracks.test.ts",
+      "coverage": "src/db/tracks.ts: 100/100/100/100; src/match/fuzzy.ts: 100/100/100/100; src/match/isrc.ts: 98.83/98.03/100/100 (line 68 unchanged from pre-F-015); src/providers/spotify/liked.ts: 100/90.9/100/100; src/sync/orchestrator.ts: 97.7/75/100/97.61. 520/520 unit tests passing (was 503; +17). All 5 TaskCompleted hook stages green.",
+      "notes": "Discovered at deploy time \u2014 first POST /sync/run hit 'Too many subrequests by single Worker invocation' (Workers Free 50/inv cap). Folded in Sprint 6 deferred review M2 + M3 (F-007 fuzzy 7-day cooldown + skipped exclusion). Touched 4 spec files for amendments. Two new sync_state keys: spotify_resume_url + spotify_sweep_max \u2014 implement mid-sweep continuation so backfill of large libraries (>~25 tracks) works without exceeding 50 subrequests. The mid-sweep design preserves I-005 (cursor advance atomic with last fetched page's persistence). Three env vars added: MATCH_BATCH_ISRC, MATCH_BATCH_FUZZY, LIKED_PAGES_PER_RUN (defaults 5/5/1; invalid input falls back to default). Deferred-deploy: live Neon doesn't need migration \u2014 sync_state already has key/value/updated_at columns; new keys are written via existing UPSERT.",
       "correction_cycles": 2,
       "scope_expansions": [],
-      "approaches_tried": [],
+      "approaches_tried": [
+        "TDD red-green: failed tests for fetchPendingMatchQueue eligibility predicate before implementing; failed tests for resume-URL semantics before bounded fetchLikedSongs",
+        "options-object signature for matchByFuzzy avoided ~50 test call-site updates while accepting the new limit param; preserved positional matchByIsrc since its limit comes from the orchestrator's queue read",
+        "Resume-URL design: spotify_resume_url + spotify_sweep_max persisted in sync_state; cursor advances only on sweep completion (cutoff hit OR Spotify next=null). All three writes share the final-page transaction (I-005)",
+        "readBudget(raw, fallback): NaN/0/negative all fall back to default. Three test cases cover the path"
+      ],
       "failure_reason": null,
       "discovered_via": "deploy-time"
     }

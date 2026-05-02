@@ -117,3 +117,28 @@ Suggested Sprint 7 team structure:
 - Phase 2: secrets minting + dev-portal redirect URI configuration
 - Phase 3: deploy + first OAuth + manual sync
 - Carry-over: F-Integ extension (closes Sprint 3 D5 + Sprint 4 D3 + Sprint 5 lock semantics drift)
+
+## Session 9 - Pre-deploy walkthrough (Steps 5-13) + F-015 refactor (2026-05-02)
+- Steps 1-6 of for-ovidiu.md verified, all carry Verified: markers. Step 6 trimmed Tidal scopes to the 2 the code actually uses (playlists.read + playlists.write); portal scope set updated to match. Commit 80c6997 pushed to origin/pre-deploy/step-5-unmatched-by-id.
+- Phase 2 secrets + redirect URIs configured by Ovidiu. wrangler upgraded to 4.87.0 (commit 5cbf49a, pushed). wrangler.toml gained SPOTIFY_REDIRECT_URI + TIDAL_REDIRECT_URI vars (commit 0a76c7f, pushed).
+- Phase 3 Step 12 deploy: route-pattern binding required pre-existing DNS; switched to custom_domain (commit c68ca33 on refactor branch). Wrangler created the Worker DNS record automatically. /healthz + /readyz green; tokens.spotify + tokens.tidal both `active` after Ovidiu's browser-based OAuth via curl-issued authorize URLs.
+- Step 18 hit production: POST /sync/run returned 500. wrangler tail surfaced `NeonDbError: Too many subrequests by single Worker invocation` — Workers Free tier 50/inv hard cap. Orchestrator was burning ~135 subrequests on a typical sync (per-track ISRC + DB write + per-track fuzzy + per-track DB write + ~20 playlist-contents pages).
+- Decision: Ovidiu rejected paying for Workers Paid; refactor for Free-tier permanent operation instead. Built F-015 in single-session plan-mode flow:
+  - Plan file: ~/.claude/plans/warm-napping-seal.md (precise budget table, file-by-file changes, test plan, verification steps)
+  - Explore-agent mapped current subrequest budget per stage with line citations
+  - 17 new tests + 4 spec amendments (F-005, F-007, F-009, F-010) + 11 src/ files touched
+  - 520/520 tests pass (was 503), tsc clean, all 5 hook stages green
+  - Commits 6a62a8b (refactor) + c68ca33 (custom_domain) on refactor/f015-bounded-invocation
+  - Coverage: src/db/tracks.ts 100%, src/match/fuzzy.ts 100%, src/providers/spotify/liked.ts 100% statements / 90.9% branches, src/sync/orchestrator.ts 97.7% statements / 75% branches (uncovered branches in unrelated paths)
+- Mid-sweep continuation design (NEW for the project): two sync_state keys (spotify_resume_url + spotify_sweep_max) persist between invocations. Cursor advances ONLY on sweep completion (cutoff hit OR Spotify next=null). All three writes share the final-page transaction (I-005). Default per-invocation budgets: 1 Spotify page, 5 ISRC tracks, 5 fuzzy tracks. Configurable via env: LIKED_PAGES_PER_RUN, MATCH_BATCH_ISRC, MATCH_BATCH_FUZZY.
+- F-007 amendment also closes Sprint 6 review M2/M3 (skipped never re-attempted; pending respects 7-day cooldown). Same predicate shared by ISRC stage's new fetchPendingMatchQueue helper.
+
+## Next Session — Deploy F-015 + complete backfill
+- Push refactor/f015-bounded-invocation branch (Ovidiu approval needed)
+- npx wrangler deploy (refactor branch on prod)
+- Switch wrangler.toml cron to `*/15 * * * *` for backfill phase + redeploy
+- Trigger first POST /sync/run; verify HTTP 200 (not 500), watch sync_runs table drain pending queue
+- Once tracks ≈ matches + skipped-unmatched (queue drained), revert cron to `["23 7 * * *", "23 19 * * *"]` + redeploy
+- Verify Tidal "Spotify Liked" playlist has the matched tracks (Step 19)
+- Carry-over: F-Integ extension (Sprint 3 D5 + Sprint 4 D3 + Sprint 5 lock semantics)
+- Carry-over: Sprint 7 deferred majors not addressed by F-015: M1 (F-012 candidates fetch), M4 (F-013 orphan ISRC UNION), M5 (F-009 error attribution), M7 (route logging swallows)
