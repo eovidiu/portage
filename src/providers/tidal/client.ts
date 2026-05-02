@@ -9,23 +9,47 @@ import { refreshTokens, needsRefresh, TidalReauthRequired } from "./oauth";
 // first prod sync.
 const TIDAL_JSONAPI_ACCEPT = "application/vnd.api+json";
 
+// F-015: per-invocation token cache. Each loadTokens call is a Neon HTTP
+// subrequest; with 5+5 match-stage calls plus playlist writes, the unbounded
+// version was burning ~12 subrequests on token reloads alone. The cache lives
+// at module scope (warm-isolate persistence) and is invalidated when needsRefresh
+// fires; refreshTokens then reloads + re-caches.
+let cachedTokens: { accessToken: string; refreshToken: string; expiresAt: Date } | null = null;
+
+async function getCachedTokens(env: Env) {
+  if (cachedTokens && !needsRefresh(cachedTokens.expiresAt)) {
+    return cachedTokens;
+  }
+  const tokens = await loadTokens(env, "tidal");
+  if (!tokens) {
+    cachedTokens = null;
+    throw new TidalReauthRequired();
+  }
+  if (needsRefresh(tokens.expiresAt)) {
+    await refreshTokens(env);
+    const fresh = await loadTokens(env, "tidal");
+    if (!fresh) {
+      cachedTokens = null;
+      throw new TidalReauthRequired();
+    }
+    cachedTokens = fresh;
+    return fresh;
+  }
+  cachedTokens = tokens;
+  return tokens;
+}
+
+/** Internal: invalidate the cache so the next call refetches. Test helper. */
+export function _resetTidalTokenCache(): void {
+  cachedTokens = null;
+}
+
 export async function tidalFetch(
   env: Env,
   path: string,
   options: RequestInit = {}
 ): Promise<Response> {
-  let tokens = await loadTokens(env, "tidal");
-  if (!tokens) {
-    throw new TidalReauthRequired();
-  }
-
-  if (needsRefresh(tokens.expiresAt)) {
-    await refreshTokens(env);
-    tokens = await loadTokens(env, "tidal");
-    if (!tokens) {
-      throw new TidalReauthRequired();
-    }
-  }
+  const tokens = await getCachedTokens(env);
 
   const countryCode = env.TIDAL_COUNTRY_CODE || "RO";
   const url = new URL(path);
@@ -34,12 +58,14 @@ export async function tidalFetch(
   const response = await _tidalRequest(url.toString(), tokens.accessToken, options);
 
   if (response.status === 401) {
+    cachedTokens = null;
     await refreshTokens(env);
-    tokens = await loadTokens(env, "tidal");
-    if (!tokens) {
+    const fresh = await loadTokens(env, "tidal");
+    if (!fresh) {
       throw new TidalReauthRequired();
     }
-    return _tidalRequest(url.toString(), tokens.accessToken, options);
+    cachedTokens = fresh;
+    return _tidalRequest(url.toString(), fresh.accessToken, options);
   }
 
   return response;

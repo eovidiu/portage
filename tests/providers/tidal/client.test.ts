@@ -12,7 +12,7 @@ vi.mock("../../../src/db/oauth_state", () => ({
   purgeExpiredOAuthState: vi.fn(),
 }));
 
-import { tidalFetch } from "../../../src/providers/tidal/client";
+import { tidalFetch, _resetTidalTokenCache } from "../../../src/providers/tidal/client";
 import { loadTokens, persistTokens, markRevoked } from "../../../src/db/provider_tokens";
 import { TidalReauthRequired } from "../../../src/providers/tidal/oauth";
 
@@ -50,6 +50,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockPersistTokens.mockResolvedValue(undefined);
   mockMarkRevoked.mockResolvedValue(undefined);
+  // F-015 cache: ensure each test starts cold so loadTokens mocks are exercised.
+  _resetTidalTokenCache();
 });
 
 // T-003-04: Tidal API calls include required headers
