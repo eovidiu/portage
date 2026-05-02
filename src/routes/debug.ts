@@ -7,6 +7,8 @@ import { Hono } from "hono";
 import { neon } from "@neondatabase/serverless";
 import type { Env } from "../env";
 import { tidalFetch } from "../providers/tidal/client";
+import { getAllPlaylistTrackIds } from "../providers/tidal/playlist";
+import { readState } from "../db/sync_state";
 import { normaliseTitle } from "../match/title";
 import { scoreCandidate, type ResolvedTidalCandidate, type SpotifyTrackInput } from "../match/score";
 import {
@@ -42,6 +44,14 @@ function resolveTrack(track: JsonApiResource, idx: IncludedIndex): ResolvedTidal
 }
 
 const debugRoutes = new Hono<{ Bindings: Env }>();
+
+debugRoutes.get("/playlist-count", async (c) => {
+  const sql = neon(c.env.DATABASE_URL);
+  const playlistId = await readState(sql, "tidal_playlist_id");
+  if (!playlistId) return c.json({ error: "no playlist persisted" }, 404);
+  const ids = await getAllPlaylistTrackIds(c.env, playlistId);
+  return c.json({ playlist_id: playlistId, track_count: ids.size });
+});
 
 debugRoutes.get("/match-trace/:spotify_id", async (c) => {
   const spotifyId = c.req.param("spotify_id");
