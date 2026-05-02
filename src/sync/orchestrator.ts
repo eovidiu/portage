@@ -158,7 +158,18 @@ async function runSyncBody(
   const tracksUnmatched = fuzzyResult.unmatched;
 
   try {
-    await writePlaylist(env);
+    const playlistResult = await writePlaylist(env);
+    console.log(
+      JSON.stringify({
+        event: "playlist_write_completed",
+        run_id: runId,
+        playlist_id: playlistResult.playlistId,
+        added: playlistResult.added,
+        skipped_duplicates: playlistResult.skippedDuplicates,
+        invalid_ids: playlistResult.invalidIds.length,
+        errors: playlistResult.errors,
+      }),
+    );
   } catch (err) {
     console.log(
       JSON.stringify({
