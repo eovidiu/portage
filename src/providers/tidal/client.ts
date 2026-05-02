@@ -2,8 +2,12 @@ import type { Env } from "../../env";
 import { loadTokens } from "../../db/provider_tokens";
 import { refreshTokens, needsRefresh, TidalReauthRequired } from "./oauth";
 
-const TIDAL_V1_ACCEPT = "application/vnd.tidal.v1+json";
-const TIDAL_V2_ACCEPT = "application/vnd.tidal.v2+json";
+// Verified: 2026-05-02 against tidal-api-oas.json — every /v2 operation
+// returns application/vnd.api+json (JSON:API standard). The legacy
+// vnd.tidal.v1+json was sent by every client request previously and Tidal
+// responded 406 to /v2 endpoints, surfacing as 100% match-stage errors on
+// first prod sync.
+const TIDAL_JSONAPI_ACCEPT = "application/vnd.api+json";
 
 export async function tidalFetch(
   env: Env,
@@ -48,18 +52,11 @@ async function _tidalRequest(
 ): Promise<Response> {
   const headers = new Headers(options.headers);
   headers.set("Authorization", `Bearer ${accessToken}`);
-  headers.set("accept", TIDAL_V1_ACCEPT);
+  headers.set("accept", TIDAL_JSONAPI_ACCEPT);
   if (options.method && options.method !== "GET" && options.method !== "HEAD") {
-    headers.set("Content-Type", TIDAL_V1_ACCEPT);
+    headers.set("Content-Type", TIDAL_JSONAPI_ACCEPT);
   }
 
   const request = new Request(url, { ...options, headers });
-  const response = await fetch(request);
-
-  const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes(TIDAL_V2_ACCEPT.split(";")[0])) {
-    console.warn(`Tidal returned vnd.tidal.v2+json from ${url}; parsing as v1 best-effort`);
-  }
-
-  return response;
+  return fetch(request);
 }

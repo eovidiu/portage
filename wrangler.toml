@@ -9,9 +9,10 @@ routes = [
   { pattern = "portage.eovidiu.co.uk", custom_domain = true }
 ]
 
-# 07:23 UTC (08:23 BST / 09:23 EEST) and 19:23 UTC (20:23 BST / 21:23 EEST)
+# Backfill mode: every 15 minutes. Revert to ["23 7 * * *", "23 19 * * *"] (2x daily UTC)
+# once tracks count ≈ matches + skipped-unmatched (queue drained) per F-010 amendment.
 [triggers]
-crons = ["23 7 * * *", "23 19 * * *"]
+crons = ["*/15 * * * *"]
 
 [vars]
 TIDAL_COUNTRY_CODE = "RO"
