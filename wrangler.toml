@@ -16,3 +16,5 @@ crons = ["23 7 * * *", "23 19 * * *"]
 [vars]
 TIDAL_COUNTRY_CODE = "RO"
 TIDAL_PLAYLIST_TITLE = "Spotify Liked"
+SPOTIFY_REDIRECT_URI = "https://portage.eovidiu.co.uk/auth/spotify/callback"
+TIDAL_REDIRECT_URI = "https://portage.eovidiu.co.uk/auth/tidal/callback"
