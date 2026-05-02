@@ -12,4 +12,10 @@ export interface Env {
   TIDAL_PLAYLIST_TITLE: string;
   /** Test-only: overrides the 300 s wall-time cap. Absent in production. */
   WALL_TIME_OVERRIDE_MS?: string;
+  /** Per-invocation Spotify Liked Songs page budget. Defaults to 1. (F-015) */
+  LIKED_PAGES_PER_RUN?: string;
+  /** Per-invocation ISRC match queue size. Defaults to 5. (F-015) */
+  MATCH_BATCH_ISRC?: string;
+  /** Per-invocation fuzzy match queue size. Defaults to 5. (F-015) */
+  MATCH_BATCH_FUZZY?: string;
 }

@@ -117,3 +117,36 @@ The cursor is stored as `key = 'spotify_cursor', value = '<ISO8601 timestamp>'`.
 - A first run on an account with N Liked Songs produces N rows in `tracks` and `sync_state.spotify_cursor` advanced to the most recent `added_at`
 - A second run immediately after produces zero new rows and does not change the cursor
 - Liking a new track on Spotify, then running the fetch, results in exactly one new row in `tracks`
+
+## Amendment 2026-05-02 (F-015): bounded per-invocation pagination
+
+The Cloudflare Workers Free tier caps a single invocation at 50 subrequests.
+A historical-backfill account with N>~25 Liked Songs cannot be processed in a
+single invocation. To stay correct on Free tier, fetch is bounded:
+
+- **R12** — `fetchLikedSongs(env, maxPages)` MUST stop after `maxPages` pages
+  are fetched in one invocation, even if `page.next` is non-null. Default 1.
+  Operator can override via env var `LIKED_PAGES_PER_RUN`.
+- **R13** — When the budget bound forces a voluntary mid-sweep stop:
+  - the next page URL MUST be persisted to `sync_state.spotify_resume_url`
+  - the `spotify_cursor` MUST NOT advance
+  - the running max `added_at` MUST be persisted to `sync_state.spotify_sweep_max`
+  All three writes share a transaction with the page's track upserts (I-005).
+- **R14** — On the next invocation, fetch MUST resume from
+  `spotify_resume_url` (when set) instead of `LIKED_SONGS_URL`. The cursor
+  cutoff (`cursor − 60s`) still applies to early-stop within the page.
+- **R15** — A sweep COMPLETES when either (a) `page.next === null` or
+  (b) the cursor cutoff is hit within a page. On completion:
+  - `spotify_cursor` MUST advance to the max of (`spotify_sweep_max`, this run's
+    runMax)
+  - `spotify_resume_url` MUST be cleared (empty string)
+  - `spotify_sweep_max` MUST be cleared
+- **R16** — `FetchResult` adds a `morePagesPending: boolean` field, true iff
+  the sweep did not complete this invocation.
+
+Two new `sync_state` keys join the schema:
+
+| Key | Cold default | Lifecycle |
+|---|---|---|
+| `spotify_resume_url` | empty string (no active sweep) | set at voluntary stop, cleared on sweep complete |
+| `spotify_sweep_max` | empty string | accumulates across mid-sweep invocations, cleared on sweep complete |

@@ -1,12 +1,13 @@
-import { neon, Pool, type PoolClient } from "@neondatabase/serverless";
+import { Pool, type PoolClient } from "@neondatabase/serverless";
 import type { Env } from "../env";
 import {
   insertRun,
   updateRun,
   markAbandonedRuns,
 } from "../db/sync_runs";
+import { fetchPendingMatchQueue } from "../db/tracks";
 import { fetchLikedSongs } from "../providers/spotify/liked";
-import { matchByIsrc, type TrackCandidate } from "../match/isrc";
+import { matchByIsrc } from "../match/isrc";
 import { matchByFuzzy } from "../match/fuzzy";
 import { writePlaylist } from "./playlist-writer";
 
@@ -40,6 +41,19 @@ function lockKey(): number {
 
 const LOCK_KEY = lockKey();
 const DEFAULT_WALL_TIME_MS = 300_000;
+
+// F-015: per-invocation budget defaults — keep small to fit Workers Free
+// 50-subrequest cap. Operator can tune via env: MATCH_BATCH_ISRC,
+// MATCH_BATCH_FUZZY, LIKED_PAGES_PER_RUN.
+const DEFAULT_MATCH_BATCH_ISRC = 5;
+const DEFAULT_MATCH_BATCH_FUZZY = 5;
+const DEFAULT_LIKED_PAGES_PER_RUN = 1;
+
+function readBudget(raw: string | undefined, fallback: number): number {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
 
 // Postgres advisory locks are session-scoped. The Neon HTTP driver opens a
 // fresh session per query, so a lock acquired via `neon()` would auto-release
@@ -84,28 +98,18 @@ async function releaseLock(session: LockSession): Promise<void> {
   }
 }
 
-async function fetchNewTracks(
-  env: Env,
-  startedAt: string,
-): Promise<TrackCandidate[]> {
-  const sql = neon(env.DATABASE_URL);
-  const rows = await sql(
-    `SELECT spotify_id, isrc, artist, duration_ms
-     FROM tracks
-     WHERE first_seen_at >= $1`,
-    [startedAt],
-  );
-  return rows as TrackCandidate[];
-}
-
 async function runSyncBody(
   env: Env,
   runId: string,
-  startedAt: string,
+  _startedAt: string,
 ): Promise<OrchestratorResult> {
+  const isrcBatch = readBudget(env.MATCH_BATCH_ISRC, DEFAULT_MATCH_BATCH_ISRC);
+  const fuzzyBatch = readBudget(env.MATCH_BATCH_FUZZY, DEFAULT_MATCH_BATCH_FUZZY);
+  const likedPages = readBudget(env.LIKED_PAGES_PER_RUN, DEFAULT_LIKED_PAGES_PER_RUN);
+
   let fetchResult: Awaited<ReturnType<typeof fetchLikedSongs>>;
   try {
-    fetchResult = await fetchLikedSongs(env);
+    fetchResult = await fetchLikedSongs(env, likedPages);
   } catch (err) {
     const errorCode = "spotify_reauth_required";
     await updateRun(env, runId, {
@@ -125,13 +129,13 @@ async function runSyncBody(
     return { outcome: "failed", run_id: runId, error_code: errorCode };
   }
 
-  const newTracks = await fetchNewTracks(env, startedAt);
+  const isrcQueue = await fetchPendingMatchQueue(env, isrcBatch);
 
   let isrcResult = { matched: 0, skipped: 0, errors: [] as Array<{ spotify_id: string; error_code: string; message: string }> };
   let fuzzyResult = { matched: 0, unmatched: 0, errors: [] as Array<{ spotify_id: string; error_code: string; message: string }> };
 
   try {
-    isrcResult = await matchByIsrc(env, newTracks, runId);
+    isrcResult = await matchByIsrc(env, isrcQueue, runId);
   } catch (err) {
     isrcResult.errors.push({
       spotify_id: "unknown",
@@ -141,7 +145,7 @@ async function runSyncBody(
   }
 
   try {
-    fuzzyResult = await matchByFuzzy(env, runId);
+    fuzzyResult = await matchByFuzzy(env, { limit: fuzzyBatch, syncRunId: runId });
   } catch (err) {
     fuzzyResult.errors.push({
       spotify_id: "unknown",

@@ -95,3 +95,23 @@ The `sync_runs.status` state machine is defined in `architecture.md` §8.1.
 - An end-to-end run on a synthetic dataset produces correct counts in the `sync_runs` row
 - Killing the worker mid-run leaves the database in a recoverable state; the next run completes successfully
 - Two concurrent invocations: one runs, the other exits cleanly with no `sync_runs` row
+
+## Amendment 2026-05-02 (F-015): per-invocation budgets
+
+To fit within the Cloudflare Workers Free 50-subrequest cap, the orchestrator
+imposes per-invocation budgets on every loop:
+
+- **R10** — Each invocation MUST process at most `MATCH_BATCH_ISRC` tracks via
+  the ISRC stage and at most `MATCH_BATCH_FUZZY` tracks via the fuzzy stage.
+  Defaults are 5 each; operator overrides via env vars.
+- **R11** — Each invocation MUST fetch at most `LIKED_PAGES_PER_RUN` Spotify
+  pages (default 1). Mid-sweep state survives in `sync_state` per F-005-R12-R16.
+- **R12** — Status `succeeded` means "this slice completed without errors".
+  Pending queue depth (un-matched tracks remaining, mid-sweep resume URL set)
+  is normal operational state and does NOT downgrade the run to `partial`.
+  The `partial` status is reserved for `errors > 0 ∧ progress > 0` per the
+  state machine in `architecture.md` §8.1.
+- **R13** — Defaults can be overridden via Worker env vars:
+  - `MATCH_BATCH_ISRC` — integer ≥1 (defaults to 5; invalid input ⇒ default)
+  - `MATCH_BATCH_FUZZY` — integer ≥1 (defaults to 5; invalid input ⇒ default)
+  - `LIKED_PAGES_PER_RUN` — integer ≥1 (defaults to 1; invalid input ⇒ default)
