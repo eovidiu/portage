@@ -69,6 +69,9 @@ The orchestrator runs the full sync sequence: fetch from Spotify (F-005), match 
 | F-009-R9 | The orchestrator MUST be idempotent at the run level: re-running the orchestrator after a failure MUST NOT cause duplicate `tracks` rows, duplicate `matches` rows, or duplicate playlist entries. |
 | F-009-R10 | The orchestrator MUST emit one structured log line on completion summarising the run (consumed by F-011). |
 | F-009-R11 | The lock MUST be released in a finally block; lock leaks MUST NOT occur on exceptions. |
+| F-009-R12 | Per-track errors caught by F-006 (matchByIsrc) and F-007 (matchByFuzzy) MUST be persisted to `sync_runs.error_details` as a JSONB array of `{spotify_id, error_code, message}` records. The array length MUST equal `sync_runs.errors`. |
+| F-009-R13 | `error_details` MUST be `NULL` for runs with `errors = 0` (succeeded runs and outer-fatal failed runs that never reached matching). |
+| F-009-R14 | The `error_code` values inside `error_details[]` MUST be drawn from the closed set defined by F-006 and F-007: `tidal_429`, `tidal_<status>` (e.g. `tidal_404`, `tidal_500`), `tidal_error`, `tidal_parse_error`, `isrc_fatal`, `fuzzy_fatal`. |
 
 ## State machine
 
@@ -115,3 +118,29 @@ imposes per-invocation budgets on every loop:
   - `MATCH_BATCH_ISRC` — integer ≥1 (defaults to 5; invalid input ⇒ default)
   - `MATCH_BATCH_FUZZY` — integer ≥1 (defaults to 5; invalid input ⇒ default)
   - `LIKED_PAGES_PER_RUN` — integer ≥1 (defaults to 1; invalid input ⇒ default)
+
+## Amendment 2026-05-03: per-track error_details persistence (R12-R14)
+
+Phase 1 diagnostic audit (`.harness/diagnostics/phase1-partials-2026-05-03.md`)
+established that ~5–7% of cron runs land as `partial` with `errors > 0`, but
+the per-track error code and `spotify_id` are emitted only as `console.log`
+JSON (24-hour retention via `wrangler tail`) and never persisted. This makes
+intermittent partials undiagnosable from DB alone.
+
+This amendment makes any partial run diagnosable from a single SQL query by
+persisting the per-track failure detail to a new column.
+
+- Adds R12 (persist), R13 (null discipline), R14 (closed code set).
+- Adds column `sync_runs.error_details JSONB DEFAULT NULL`. Migration is
+  purely additive; old rows remain `NULL`.
+- Existing `errors` INT and `error_code` TEXT columns retained unchanged.
+- T-009-15 / T-009-16 / T-009-17 added to gate the new persistence behaviour.
+
+Diagnostic query post-deploy:
+
+```sql
+SELECT detail->>'error_code' AS code, COUNT(*) AS n
+FROM sync_runs, jsonb_array_elements(error_details) AS detail
+WHERE status = 'partial' AND started_at > NOW() - INTERVAL '7 days'
+GROUP BY 1 ORDER BY 2 DESC;
+```

@@ -55,6 +55,10 @@ CREATE TABLE IF NOT EXISTS sync_runs (
 -- Added by F-009: error_code captures the terminal failure reason (e.g. 'spotify_reauth_required').
 ALTER TABLE sync_runs ADD COLUMN IF NOT EXISTS error_code TEXT;
 
+-- Added by F-009 amendment 2026-05-03 (R12-R14): per-track error_details for partial-run diagnosis.
+-- Shape: [{spotify_id, error_code, message}, ...]. NULL for runs with errors=0.
+ALTER TABLE sync_runs ADD COLUMN IF NOT EXISTS error_details JSONB DEFAULT NULL;
+
 -- Confirmed Spotify→Tidal pairings.
 -- A spotify_id present here MUST NOT appear in unmatched (I-001).
 CREATE TABLE IF NOT EXISTS matches (

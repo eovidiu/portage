@@ -6,6 +6,14 @@ import type { Env } from "../env";
 
 export type SyncRunStatus = "running" | "succeeded" | "partial" | "failed";
 
+// F-009-R12/R14: per-track failure record persisted to sync_runs.error_details.
+// Shape produced verbatim by F-006 matchByIsrc and F-007 matchByFuzzy errors[].
+export interface PerTrackError {
+  spotify_id: string;
+  error_code: string;
+  message: string;
+}
+
 export interface SyncRunRow {
   run_id: string;
   started_at: string; // ISO 8601
@@ -17,6 +25,7 @@ export interface SyncRunRow {
   matched_fuzzy: number;
   unmatched: number;
   errors: number;
+  error_details: PerTrackError[] | null;
 }
 
 export type SyncRunUpdate = Partial<
@@ -30,6 +39,7 @@ export type SyncRunUpdate = Partial<
     | "matched_fuzzy"
     | "unmatched"
     | "errors"
+    | "error_details"
   >
 >;
 
@@ -101,8 +111,18 @@ export async function updateRun(
   const keys = Object.keys(patch) as (keyof SyncRunUpdate)[];
   if (keys.length === 0) return;
 
-  const setClauses = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
-  const values = keys.map((k) => patch[k]);
+  // F-009-R12: error_details is JSONB; serialize to JSON text and cast at the
+  // SQL layer so Postgres stores it as a structured value, not a quoted string.
+  const setClauses = keys
+    .map((k, i) => (k === "error_details" ? `${k} = $${i + 1}::jsonb` : `${k} = $${i + 1}`))
+    .join(", ");
+  const values = keys.map((k) => {
+    const v = patch[k];
+    if (k === "error_details") {
+      return v === null || v === undefined ? null : JSON.stringify(v);
+    }
+    return v;
+  });
   values.push(runId);
 
   await sql(
@@ -130,7 +150,7 @@ export async function getLatestRun(env: Env): Promise<SyncRunRow | null> {
   const sql = neon(env.DATABASE_URL);
   const rows = await sql(
     `SELECT run_id, started_at, finished_at, status, error_code,
-            tracks_seen, matched_isrc, matched_fuzzy, unmatched, errors
+            tracks_seen, matched_isrc, matched_fuzzy, unmatched, errors, error_details
      FROM sync_runs
      ORDER BY started_at DESC
      LIMIT 1`,
@@ -162,7 +182,7 @@ export async function getRecentRuns(
   const sql = neon(env.DATABASE_URL);
   const rows = await sql(
     `SELECT run_id, started_at, finished_at, status, error_code,
-            tracks_seen, matched_isrc, matched_fuzzy, unmatched, errors
+            tracks_seen, matched_isrc, matched_fuzzy, unmatched, errors, error_details
      FROM sync_runs
      ORDER BY started_at DESC
      LIMIT $1`,

@@ -68,6 +68,36 @@ describe("T-011: updateRun", () => {
     await updateRun(makeEnv(), "run-id", {});
     expect(mockSql).not.toHaveBeenCalled();
   });
+
+  it("serialises error_details as JSON with ::jsonb cast", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    await updateRun(makeEnv(), "run-id", {
+      status: "partial",
+      errors: 1,
+      error_details: [
+        { spotify_id: "spX", error_code: "tidal_429", message: "rate limited" },
+      ],
+    });
+    const [query, params] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(query).toContain("UPDATE sync_runs");
+    expect(query).toContain("error_details = ");
+    expect(query).toMatch(/error_details\s*=\s*\$\d+::jsonb/);
+    const jsonString = JSON.stringify([
+      { spotify_id: "spX", error_code: "tidal_429", message: "rate limited" },
+    ]);
+    expect(params).toContain(jsonString);
+  });
+
+  it("passes error_details=null through unchanged (no jsonb cast required for NULL but accepted)", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    await updateRun(makeEnv(), "run-id", {
+      status: "succeeded",
+      errors: 0,
+      error_details: null,
+    });
+    const [, params] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(params).toContain(null);
+  });
 });
 
 describe("T-011: markAbandonedRuns", () => {
