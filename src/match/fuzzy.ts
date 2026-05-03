@@ -38,6 +38,7 @@ import type { Env } from "../env";
 // path traversal). Without these, every candidate had primaryArtist=""
 // /albumTitle="" → artistScore=0/albumScore=0 → max possible total 0.60,
 // guaranteed-below-0.85 threshold → 100% fuzzy rejection rate.
+// Verified: 2026-04-27 against https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json (path /v2/searchResults/{id} GET, camelCase; include enum allows tracks,artists,albums; data is SearchResults_Resource_Object).
 const TIDAL_SEARCH_BASE = "https://openapi.tidal.com/v2/searchResults";
 
 const ACCEPT_THRESHOLD = 0.85;
