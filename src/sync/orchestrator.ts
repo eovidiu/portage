@@ -154,7 +154,8 @@ async function runSyncBody(
     });
   }
 
-  const totalErrors = isrcResult.errors.length + fuzzyResult.errors.length;
+  const allErrors = [...isrcResult.errors, ...fuzzyResult.errors];
+  const totalErrors = allErrors.length;
   const tracksUnmatched = fuzzyResult.unmatched;
 
   try {
@@ -200,6 +201,7 @@ async function runSyncBody(
     matched_fuzzy: fuzzyResult.matched,
     unmatched: tracksUnmatched,
     errors: totalErrors,
+    error_details: totalErrors > 0 ? allErrors : null,
   });
 
   const result: OrchestratorResult = {

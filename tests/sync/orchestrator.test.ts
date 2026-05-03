@@ -570,3 +570,96 @@ describe("F-015: bounded per-invocation budgets", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// T-009-15: Partial run persists per-track error_details (F-009-R12)
+// ---------------------------------------------------------------------------
+describe("T-009-15: Partial run persists per-track error_details", () => {
+  it("updateRun receives error_details array with the matcher-reported entry", async () => {
+    setupSqlSuccess();
+    setupProviders({
+      isrcErrors: [
+        {
+          spotify_id: "spX",
+          error_code: "tidal_429",
+          message: "Second 429 received; track deferred to F-007",
+        },
+      ],
+    });
+
+    const result = await runSync(makeEnv());
+
+    expect(result.outcome).toBe("partial");
+    expect(mockUpdateRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-001",
+      expect.objectContaining({
+        status: "partial",
+        errors: 1,
+        error_details: [
+          {
+            spotify_id: "spX",
+            error_code: "tidal_429",
+            message: "Second 429 received; track deferred to F-007",
+          },
+        ],
+      }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-009-16: Succeeded run leaves error_details NULL (F-009-R13)
+// ---------------------------------------------------------------------------
+describe("T-009-16: Succeeded run leaves error_details null", () => {
+  it("updateRun receives error_details=null when no errors occurred", async () => {
+    setupSqlSuccess();
+    setupProviders();
+
+    const result = await runSync(makeEnv());
+
+    expect(result.outcome).toBe("succeeded");
+    expect(mockUpdateRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-001",
+      expect.objectContaining({ status: "succeeded", errors: 0, error_details: null }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-009-17: error_details length matches errors count (F-009-R12 invariant)
+// ---------------------------------------------------------------------------
+describe("T-009-17: error_details length matches errors count", () => {
+  it("merges isrc and fuzzy errors preserving order; length === errors", async () => {
+    setupSqlSuccess();
+    setupProviders({
+      isrcErrors: [
+        { spotify_id: "sp1", error_code: "tidal_429", message: "rate limited" },
+        { spotify_id: "sp2", error_code: "tidal_500", message: "Tidal returned HTTP 500" },
+      ],
+      fuzzyErrors: [
+        {
+          spotify_id: "sp3",
+          error_code: "tidal_parse_error",
+          message: "Failed to parse Tidal search response JSON",
+        },
+      ],
+    });
+
+    const result = await runSync(makeEnv());
+
+    expect(result.outcome).toBe("partial");
+    expect(result.errors).toBe(3);
+
+    const updateCall = mockUpdateRun.mock.calls.find(
+      (call) => (call[2] as { status?: string }).status === "partial",
+    );
+    expect(updateCall).toBeDefined();
+    const patch = updateCall![2] as { error_details: Array<{ error_code: string }> | null };
+    expect(patch.error_details).not.toBeNull();
+    expect(patch.error_details).toHaveLength(3);
+    const codes = patch.error_details!.map((e) => e.error_code).sort();
+    expect(codes).toEqual(["tidal_429", "tidal_500", "tidal_parse_error"].sort());
+  });
+});
