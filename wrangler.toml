@@ -19,3 +19,8 @@ TIDAL_COUNTRY_CODE = "RO"
 TIDAL_PLAYLIST_TITLE = "Spotify Liked"
 SPOTIFY_REDIRECT_URI = "https://portage.eovidiu.co.uk/auth/spotify/callback"
 TIDAL_REDIRECT_URI = "https://portage.eovidiu.co.uk/auth/tidal/callback"
+
+[observability]
+[observability.logs]
+enabled = true
+invocation_logs = true
