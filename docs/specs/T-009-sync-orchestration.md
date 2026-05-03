@@ -197,3 +197,51 @@ Covers F-009.
 **Measurement**: Number of log lines with `event == 'sync_run_completed'` for that run id.
 
 **Pass**: metric value MUST equal 1.
+
+---
+
+## T-009-15: Partial run persists per-track error_details (F-009-R12)
+
+**Type**: behaviour
+
+**Setup**: Mock `matchByIsrc` to return `{matched: 1, skipped: 0, errors: [{spotify_id: "spX", error_code: "tidal_429", message: "Second 429 received; track deferred to F-007"}]}`. Mock `matchByFuzzy` to return `{matched: 1, unmatched: 0, errors: []}`. Mock `writePlaylist` to succeed.
+
+**Action**: Invoke `runSyncOnce()`.
+
+**Assertion**:
+- `sync_runs.status === 'partial'`
+- `sync_runs.errors === 1`
+- `sync_runs.error_details` is a JSONB array of length 1
+- `error_details[0].error_code === 'tidal_429'`
+- `error_details[0].spotify_id === 'spX'`
+- `error_details[0].message` is a non-empty string
+
+---
+
+## T-009-16: Succeeded run leaves error_details NULL (F-009-R13)
+
+**Type**: behaviour
+
+**Setup**: Mock `matchByIsrc` and `matchByFuzzy` to return non-zero matches with empty `errors[]`. Mock `writePlaylist` to succeed.
+
+**Action**: Invoke `runSyncOnce()`.
+
+**Assertion**:
+- `sync_runs.status === 'succeeded'`
+- `sync_runs.errors === 0`
+- `sync_runs.error_details IS NULL`
+
+---
+
+## T-009-17: error_details length matches errors count (F-009-R12 invariant)
+
+**Type**: behaviour
+
+**Setup**: Mock `matchByIsrc` to return two errors with distinct codes (`tidal_429` and `tidal_500`). Mock `matchByFuzzy` to return one error (`tidal_parse_error`). Total: three errors.
+
+**Action**: Invoke `runSyncOnce()`.
+
+**Assertion**:
+- `sync_runs.errors === 3`
+- `jsonb_array_length(sync_runs.error_details) === 3`
+- The set of `error_code` values in the array equals `{'tidal_429', 'tidal_500', 'tidal_parse_error'}`
