@@ -564,3 +564,26 @@ describe("matchByIsrc — 429 retry without Retry-After header (line 98)", () =>
     vi.useRealTimers();
   });
 });
+
+// T-006-15: ISRC normalised to uppercase before query (F-006-R12)
+describe("T-006-15: ISRC normalised to uppercase (F-006-R12)", () => {
+  it("uppercases lowercase ISRCs before passing to Tidal filter[isrc]", async () => {
+    mockTidalFetch.mockResolvedValueOnce(tidalResponse(makeTidalTrack({ isrc: "USX9P1417118" })));
+
+    await matchByIsrc(makeEnv(), [makeTrack({ isrc: "usx9p1417118", artist: "Bucovina" })]);
+
+    expect(mockTidalFetch).toHaveBeenCalledOnce();
+    const url = mockTidalFetch.mock.calls[0][1] as string;
+    expect(url).toContain("filter[isrc]=USX9P1417118");
+    expect(url).not.toContain("usx9p1417118");
+  });
+
+  it("leaves already-uppercase ISRCs unchanged", async () => {
+    mockTidalFetch.mockResolvedValueOnce(tidalResponse(makeTidalTrack({ isrc: "GBUM71029604" })));
+
+    await matchByIsrc(makeEnv(), [makeTrack({ isrc: "GBUM71029604" })]);
+
+    const url = mockTidalFetch.mock.calls[0][1] as string;
+    expect(url).toContain("filter[isrc]=GBUM71029604");
+  });
+});
