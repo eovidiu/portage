@@ -142,3 +142,25 @@ Content-Type: application/json
 - A pending row, after manual match, appears in the Tidal playlist on the next sync
 - Skipping a pending row prevents it from ever being processed by F-007 again
 - Listing unmatched returns within 10 seconds even with 50 pending rows
+
+## Amendment 2026-05-04: skip semantics are manual-only
+
+Clarification (no behaviour change): `unmatched.status = 'skipped'` is set
+ONLY via `POST /unmatched/:spotify_id/skip` (F-012-R9). There is **no
+automatic age-based eviction** — pending rows older than N days are NOT
+auto-promoted to skipped. The only automatic behaviour for stale pending
+rows is F-007's 7-day cooldown re-evaluation (F-012-R11): they are
+re-attempted, with success transitioning to matched and failure leaving
+status='pending' with attempts incremented.
+
+This is by design. Operator/iOS-driven curation owns the skip decision; the
+system does not silently abandon tracks that the user might want manually
+matched. Operationally this means:
+
+- The `unmatched`-pending queue grows monotonically until manually serviced.
+- The wrangler.toml comment historically referencing "skipped-unmatched" as
+  a drain criterion was misleading and was removed in PR #5; the actual
+  drain criterion is `truly_unprocessed = 0` via LEFT JOIN (every track is
+  in either `matches` or `unmatched`, regardless of unmatched status).
+- T-012-11 / T-012-12 cover the route-level skip behaviour. DB-layer SQL
+  emission for `markSkipped` is unit-tested in tests/db/unmatched.test.ts.
