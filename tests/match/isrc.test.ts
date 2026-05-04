@@ -142,10 +142,14 @@ describe("T-006-01: ISRC match with agreeing artist", () => {
 
     expect(result.matched).toBe(1);
     expect(result.errors).toHaveLength(0);
-    expect(mockSql).toHaveBeenCalledOnce();
 
-    const [query, params] = mockSql.mock.calls[0] as [string, unknown[]];
-    expect(query).toContain("INSERT INTO matches");
+    // insertMatch issues two sql calls: INSERT INTO matches + UPDATE unmatched
+    // (I-001 enforcement). Inspect the first call for match-row params.
+    const insertCall = mockSql.mock.calls.find((c) =>
+      (c[0] as string).includes("INSERT INTO matches"),
+    );
+    expect(insertCall).toBeDefined();
+    const params = insertCall![1] as unknown[];
     expect(params[2]).toBe("isrc");
     expect(params[3]).toBe(0.95);
   });

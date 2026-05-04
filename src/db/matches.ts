@@ -8,7 +8,19 @@ export interface MatchRow {
   sync_run_id: string | null;
 }
 
-/** Insert a match row. ON CONFLICT DO NOTHING (idempotent re-runs). */
+/**
+ * Insert a match row and evict any matching unmatched-pending row.
+ *
+ * I-001 invariant (architecture.md): a spotify_id present in `matches` MUST
+ * NOT appear in `unmatched` with status='pending'. Without the second UPDATE
+ * the matcher could create dual-membership rows (track promoted from unmatched
+ * via fuzzy retry but the unmatched-pending row left behind).
+ *
+ * The two statements are sequential, not transactional. Atomicity is provided
+ * by the orchestrator's `sync_run_lock` advisory lock (F-009-R1) — concurrent
+ * insertMatch is impossible. ON CONFLICT DO NOTHING + idempotent UPDATE make
+ * this crash-safe across retries.
+ */
 export async function insertMatch(
   sql: NeonQueryFunction<false, false>,
   row: MatchRow,
@@ -18,6 +30,11 @@ export async function insertMatch(
      VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (spotify_id) DO NOTHING`,
     [row.spotify_id, row.tidal_id, row.method, row.confidence, row.sync_run_id],
+  );
+  await sql(
+    `UPDATE unmatched SET status = 'matched'
+     WHERE spotify_id = $1 AND status = 'pending'`,
+    [row.spotify_id],
   );
 }
 
