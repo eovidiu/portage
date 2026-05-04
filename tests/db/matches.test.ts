@@ -13,7 +13,7 @@ beforeEach(() => {
 
 describe("insertMatch", () => {
   it("executes INSERT with correct parameters", async () => {
-    mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValue([]);
     await insertMatch(mockSql as never, {
       spotify_id: "sp1",
       tidal_id: "td1",
@@ -21,14 +21,13 @@ describe("insertMatch", () => {
       confidence: 0.95,
       sync_run_id: "run-uuid",
     });
-    expect(mockSql).toHaveBeenCalledOnce();
     const [query, params] = mockSql.mock.calls[0] as [string, unknown[]];
     expect(query).toContain("INSERT INTO matches");
     expect(params).toEqual(["sp1", "td1", "isrc", 0.95, "run-uuid"]);
   });
 
   it("accepts null sync_run_id", async () => {
-    mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValue([]);
     await insertMatch(mockSql as never, {
       spotify_id: "sp2",
       tidal_id: "td2",
@@ -38,6 +37,29 @@ describe("insertMatch", () => {
     });
     const [, params] = mockSql.mock.calls[0] as [string, unknown[]];
     expect(params[4]).toBeNull();
+  });
+
+  // I-001 invariant: matches and unmatched-pending must be mutually exclusive.
+  // Without the second UPDATE, fuzzy-retry-after-ISRC-fail produces dual-
+  // membership rows. Regression discovered 2026-05-04 (46 violations in prod).
+  it("evicts the unmatched-pending row in the same call (I-001 enforcement)", async () => {
+    mockSql.mockResolvedValue([]);
+    await insertMatch(mockSql as never, {
+      spotify_id: "spX",
+      tidal_id: "tdX",
+      method: "fuzzy",
+      confidence: 0.92,
+      sync_run_id: "run-9",
+    });
+
+    expect(mockSql).toHaveBeenCalledTimes(2);
+    const [insertQuery] = mockSql.mock.calls[0] as [string, unknown[]];
+    const [updateQuery, updateParams] = mockSql.mock.calls[1] as [string, unknown[]];
+    expect(insertQuery).toContain("INSERT INTO matches");
+    expect(updateQuery).toContain("UPDATE unmatched");
+    expect(updateQuery).toContain("status = 'matched'");
+    expect(updateQuery).toContain("status = 'pending'");
+    expect(updateParams).toEqual(["spX"]);
   });
 });
 

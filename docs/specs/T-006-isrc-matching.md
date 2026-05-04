@@ -197,3 +197,18 @@ Covers F-006.
 **Assertion**: Zero `matches` rows for that spotify_id.
 
 **Pass**: TRUE if count == 0.
+
+---
+
+## T-006-15: ISRC normalised to uppercase (F-006-R12)
+
+**Type**: assertion
+
+**Setup**: A track with a lowercase ISRC (e.g., `'usx9p1417118'`).
+
+**Action**: Run the matcher; capture the URL passed to `tidalFetch`.
+
+**Assertion**: The captured URL contains `filter[isrc]=USX9P1417118` (URL-encoded
+uppercase). The URL MUST NOT contain the lowercase form.
+
+**Pass**: TRUE if both conditions hold.
