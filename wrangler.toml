@@ -9,10 +9,11 @@ routes = [
   { pattern = "portage.eovidiu.co.uk", custom_domain = true }
 ]
 
-# Backfill mode: every 15 minutes. Revert to ["23 7 * * *", "23 19 * * *"] (2x daily UTC)
-# once tracks count ≈ matches + skipped-unmatched (queue drained) per F-010 amendment.
+# Steady-state mode (2x daily UTC) per F-010. Backfill drained 2026-05-04 ~09:30 UTC
+# (truly_unprocessed = 0 via LEFT JOIN on tracks/matches/unmatched). Re-enable
+# */15 backfill if Liked Songs queue grows back into a backlog.
 [triggers]
-crons = ["*/15 * * * *"]
+crons = ["23 7 * * *", "23 19 * * *"]
 
 [vars]
 TIDAL_COUNTRY_CODE = "RO"
