@@ -104,7 +104,10 @@ async function fetchByIsrc(
   // include=artists materialises artist resources in `included[]` so the matcher
   // can verify F-006-R3 artist agreement; without this Tidal returns only artist
   // refs in `relationships`, leaving names unresolved.
-  const url = `${TIDAL_TRACKS_URL}?filter[isrc]=${encodeURIComponent(isrc)}&include=artists`;
+  // F-006-R12: ISO 3901 mandates uppercase ISRCs. Spotify forwards values
+  // verbatim and sometimes returns lowercase legacy entries; Tidal returns
+  // HTTP 400 for those, so normalise here.
+  const url = `${TIDAL_TRACKS_URL}?filter[isrc]=${encodeURIComponent(isrc.toUpperCase())}&include=artists`;
   const first = await tidalFetch(env, url);
   if (first.status !== 429) return { response: first, retried: false };
 

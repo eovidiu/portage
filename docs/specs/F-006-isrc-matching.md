@@ -67,6 +67,7 @@ For every `tracks` row that has an `isrc` and no entry in `matches` or `unmatche
 | F-006-R9 | If Tidal returns HTTP 401, the matcher MUST trigger a token refresh and retry once. |
 | F-006-R10 | If Tidal returns HTTP 429, the matcher MUST sleep for `Retry-After` and retry once; a second 429 MUST be recorded as a per-track error and the track passed to F-007. |
 | F-006-R11 | All Tidal API responses MUST be parsed defensively; missing fields MUST NOT crash the matcher. |
+| F-006-R12 | ISRC values MUST be normalised to uppercase before being passed to Tidal `/v2/tracks?filter[isrc]=...`. ISO 3901 mandates uppercase; Spotify sometimes returns lowercase legacy entries; Tidal returns HTTP 400 for those. |
 
 ## Algorithm: artist agreement
 
