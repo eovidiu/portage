@@ -28,3 +28,6 @@ npm-debug.log*
 
 # Local operational dumps
 unmatched-review.md
+
+# Claude Code session-local state (cron mutex, transient runtime files)
+.claude/scheduled_tasks.lock
