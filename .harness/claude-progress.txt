@@ -142,3 +142,37 @@ Suggested Sprint 7 team structure:
 - Verify Tidal "Spotify Liked" playlist has the matched tracks (Step 19)
 - Carry-over: F-Integ extension (Sprint 3 D5 + Sprint 4 D3 + Sprint 5 lock semantics)
 - Carry-over: Sprint 7 deferred majors not addressed by F-015: M1 (F-012 candidates fetch), M4 (F-013 orphan ISRC UNION), M5 (F-009 error attribution), M7 (route logging swallows)
+
+## Session 10 - Multi-playlist sync planning + decisions locked (2026-05-07)
+- Mode: single-session via /harness-continue invoked from Telegram. Argument: "Expand .harness/explorations/multi-playlist-sync.md into an implementation plan".
+- Inputs: existing 655-line opsx:explore writeup `.harness/explorations/multi-playlist-sync.md` (2026-05-06) + parallel 31KB `.harness/explorations/bidirectional-sync.md` (orthogonal scope per its §122).
+- Deliverable: `.harness/explorations/multi-playlist-sync-IMPLEMENTATION-PLAN.md` (12 sections covering decision points, F-016/F-017/F-018/F-016b decomposition with file scopes, dep graph, schema migration sequencing, sprint-7 follow-up sequencing, risk register, spec amendments, test strategy, execution order).
+- Decisions locked (Ovidiu confirmed via Telegram 2026-05-07):
+  - Q1 unify Liked Songs into playlist_membership (one write path, one-time backfill SQL in commit ①)
+  - Q3 MAX_PLAYLISTS_PER_RUN=3 (4 playlists total incl Liked → ~18 subrequests per tick, 32 retry headroom)
+  - Q4 backfill pre-sets synced_at = matched_at for currently-matched Liked tracks (F-008 add-tracks idempotent on already-present items per commit e6f2eb6, so wrong assumption self-corrects)
+  - Q-num multi-playlist owns F-016/F-017/F-018; bidirectional renumbers to F-019+ if/when it ships
+  - Q-prio functional order — F-009 M5 (discriminated error_code) ships before F-016b touches the orchestrator
+- Untracked dirs (`.claude/commands/opsx/`, `.claude/skills/openspec-*/`, `openspec/`) — Ovidiu confirmed leave alone.
+- Housekeeping landed:
+  - Plan file updated with locked decisions in §0 and execution order in §12
+  - features.json: total_features 18 → 22, four pending entries appended (F-016 priority 10, F-017 priority 11, F-018 priority 12, F-016b priority 13). Dep graph verified — all references resolve (F-005/F-008 use no-hyphen ids; F-015 uses hyphen; new entries use hyphen and reference targets by their actual id).
+  - context_summary.md Active Context refreshed to reflect multi-playlist phase + decisions locked. Prior content preserved (Sprint 6 close-out kept for reference).
+- Held back: live Neon migrations (CREATE TABLE playlist_configs + __liked__ INSERT for F-016; CREATE TABLE playlist_membership + 2 indices + Q4 backfill INSERT for F-017). CHECKPOINT in task list — applied with Ovidiu present at terminal, not unattended.
+- Task list (12 items, deps wired) survives compaction:
+  1-3 housekeeping (DONE)
+  4 F-009 M5 fix (PENDING — next executable; precedes F-016b)
+  5 F-016 spec authoring
+  6 db/schema.sql edit
+  7 src/db/playlist_configs.ts TDD
+  8 src/providers/spotify/playlists.ts TDD
+  9 src/sync/playlist-config-seeder.ts TDD
+  10 src/env.ts extension
+  11 F-016 coverage gate + features.json passing flip
+  12 CHECKPOINT for live Neon migration
+
+## Next Session — F-009 M5 + F-016 Phase A
+- Pick up at task #4 (F-009 M5 discriminated error_code). Expected ~30 LOC src + tests; small spec amendment to F-009 §error-handling enumerating the codes.
+- After M5: task #5 onward is F-016 Phase A. Spec → schema.sql → DB layer → provider helper → seeder → env. End-of-phase CHECKPOINT (task #12) is the live Neon migration; do not run mcp__Neon__run_sql for the DDL without Ovidiu present.
+- Open Telegram channel: chat_id 7899473049. Ovidiu paired this session and may resume via Telegram.
+- Open PR / branch creation deferred until F-016 code is locally green and Ovidiu approves the live migration.

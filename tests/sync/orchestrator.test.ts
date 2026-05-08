@@ -240,13 +240,16 @@ describe("T-009-04: Per-track error transitions to partial", () => {
 });
 
 // ---------------------------------------------------------------------------
-// T-009-05: F-005 hard failure marks run failed
+// T-009-05: F-005 hard failure marks run failed (R15 discriminating classifier)
 // ---------------------------------------------------------------------------
 describe("T-009-05: F-005 hard failure marks run failed", () => {
-  it("sets status=failed with spotify_reauth_required when fetchLikedSongs throws", async () => {
+  it("T-009-05a: SpotifyAuthError(reauth_required) -> spotify_reauth_required", async () => {
     setupSqlSuccess();
     setupProviders();
-    mockFetchLikedSongs.mockRejectedValue(new Error("invalid_grant"));
+    const { SpotifyAuthError } = await import("../../src/providers/spotify/oauth");
+    mockFetchLikedSongs.mockRejectedValue(
+      new SpotifyAuthError("reauth_required", "Spotify refresh token revoked (invalid_grant)"),
+    );
 
     const result = await runSync(makeEnv());
 
@@ -259,6 +262,79 @@ describe("T-009-05: F-005 hard failure marks run failed", () => {
     );
     expect(mockMatchByIsrc).not.toHaveBeenCalled();
     expect(mockMatchByFuzzy).not.toHaveBeenCalled();
+  });
+
+  it("T-009-05b: SpotifyAuthError(refresh_failed) -> spotify_transient", async () => {
+    setupSqlSuccess();
+    setupProviders();
+    const { SpotifyAuthError } = await import("../../src/providers/spotify/oauth");
+    mockFetchLikedSongs.mockRejectedValue(
+      new SpotifyAuthError("refresh_failed", "Spotify refresh failed: 503"),
+    );
+
+    const result = await runSync(makeEnv());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.error_code).toBe("spotify_transient");
+    expect(mockUpdateRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-001",
+      expect.objectContaining({ status: "failed", error_code: "spotify_transient" }),
+    );
+  });
+
+  it("T-009-05c: IntegrityError -> decrypt_failed", async () => {
+    setupSqlSuccess();
+    setupProviders();
+    const { IntegrityError } = await import("../../src/crypto");
+    mockFetchLikedSongs.mockRejectedValue(
+      new IntegrityError("decryption failed: token_integrity_failure"),
+    );
+
+    const result = await runSync(makeEnv());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.error_code).toBe("decrypt_failed");
+    expect(mockUpdateRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-001",
+      expect.objectContaining({ status: "failed", error_code: "decrypt_failed" }),
+    );
+  });
+
+  it("T-009-05d: Spotify 5xx Error -> spotify_transient", async () => {
+    setupSqlSuccess();
+    setupProviders();
+    mockFetchLikedSongs.mockRejectedValue(new Error("Spotify API error: 503"));
+
+    const result = await runSync(makeEnv());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.error_code).toBe("spotify_transient");
+  });
+
+  it("T-009-05e: Spotify rate-limit Error -> spotify_transient", async () => {
+    setupSqlSuccess();
+    setupProviders();
+    mockFetchLikedSongs.mockRejectedValue(
+      new Error("Spotify rate limit: second 429 received, aborting run"),
+    );
+
+    const result = await runSync(makeEnv());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.error_code).toBe("spotify_transient");
+  });
+
+  it("T-009-05f: generic Error -> fetch_failed", async () => {
+    setupSqlSuccess();
+    setupProviders();
+    mockFetchLikedSongs.mockRejectedValue(new Error("Spotify API error: 404"));
+
+    const result = await runSync(makeEnv());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.error_code).toBe("fetch_failed");
   });
 });
 
@@ -442,14 +518,14 @@ describe("T-009-08b: fuzzy match exception handled gracefully", () => {
     expect(result.outcome).toBe("succeeded");
   });
 
-  it("handles non-Error throw from fetchLikedSongs", async () => {
+  it("T-009-05g: non-Error throw from fetchLikedSongs -> fetch_failed", async () => {
     setupSqlSuccess();
     setupProviders();
     mockFetchLikedSongs.mockRejectedValue("string-fetch-error");
 
     const result = await runSync(makeEnv());
     expect(result.outcome).toBe("failed");
-    expect(result.error_code).toBe("spotify_reauth_required");
+    expect(result.error_code).toBe("fetch_failed");
   });
 });
 

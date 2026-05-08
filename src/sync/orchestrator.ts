@@ -7,6 +7,8 @@ import {
 } from "../db/sync_runs";
 import { fetchPendingMatchQueue } from "../db/tracks";
 import { fetchLikedSongs } from "../providers/spotify/liked";
+import { SpotifyAuthError } from "../providers/spotify/oauth";
+import { IntegrityError } from "../crypto";
 import { matchByIsrc } from "../match/isrc";
 import { matchByFuzzy } from "../match/fuzzy";
 import { writePlaylist } from "./playlist-writer";
@@ -53,6 +55,30 @@ function readBudget(raw: string | undefined, fallback: number): number {
   if (raw === undefined) return fallback;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+// F-009-R15: outer-error classifier for the F-005 fetch stage.
+// Maps the thrown value to one of the discriminated codes from the
+// failure-modes table.
+type FetchErrorCode =
+  | "spotify_reauth_required"
+  | "spotify_transient"
+  | "decrypt_failed"
+  | "fetch_failed";
+
+const TRANSIENT_MESSAGE_PATTERN = /rate limit|Spotify API error.*: 5\d\d/;
+
+function classifyFetchError(err: unknown): FetchErrorCode {
+  if (err instanceof SpotifyAuthError) {
+    return err.code === "reauth_required"
+      ? "spotify_reauth_required"
+      : "spotify_transient";
+  }
+  if (err instanceof IntegrityError) return "decrypt_failed";
+  if (err instanceof Error && TRANSIENT_MESSAGE_PATTERN.test(err.message)) {
+    return "spotify_transient";
+  }
+  return "fetch_failed";
 }
 
 // Postgres advisory locks are session-scoped. The Neon HTTP driver opens a
@@ -111,7 +137,7 @@ async function runSyncBody(
   try {
     fetchResult = await fetchLikedSongs(env, likedPages);
   } catch (err) {
-    const errorCode = "spotify_reauth_required";
+    const errorCode = classifyFetchError(err);
     await updateRun(env, runId, {
       status: "failed",
       error_code: errorCode,

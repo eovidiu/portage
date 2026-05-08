@@ -1,7 +1,7 @@
 {
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
-  "total_features": 18,
+  "total_features": 22,
   "passing": 18,
   "features": [
     {
@@ -587,6 +587,125 @@
       ],
       "failure_reason": null,
       "discovered_via": "deploy-time"
+    },
+    {
+      "id": "F-016",
+      "spec": "docs/specs/F-016-playlist-config.md",
+      "test_spec": "docs/specs/T-016-playlist-config.md",
+      "description": "Playlist config registry: playlist_configs table, env var SPOTIFY_EXTRA_PLAYLIST_IDS, fetchSpotifyPlaylistName provider helper, seedPlaylistConfigs orchestrator hook (no orchestrator wiring yet)",
+      "priority": 10,
+      "status": "pending",
+      "scope": [
+        "src/db/playlist_configs.ts",
+        "src/providers/spotify/playlists.ts",
+        "src/sync/playlist-config-seeder.ts",
+        "src/env.ts",
+        "db/schema.sql",
+        "tests/db/playlist_configs.test.ts",
+        "tests/providers/spotify/playlists.test.ts",
+        "tests/sync/playlist-config-seeder.test.ts",
+        "docs/specs/F-016-playlist-config.md",
+        "docs/specs/T-016-playlist-config.md"
+      ],
+      "depends_on": [],
+      "assigned_to": null,
+      "test_file": null,
+      "coverage": null,
+      "notes": "Foundation for multi-playlist sync. Decisions locked 2026-05-07: Q1 unify Liked into playlist_membership; Q3 MAX_PLAYLISTS_PER_RUN=3; Q4 backfill pre-sets synced_at=matched_at; Q-num multi-playlist owns F-016/F-017/F-018. Phase A single-session. Live Neon migration (CREATE TABLE playlist_configs + __liked__ INSERT) deferred until Ovidiu present at terminal — held as a CHECKPOINT in task list. Schema landed in db/schema.sql first to satisfy Stage 4 hook.",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [],
+      "failure_reason": null,
+      "discovered_via": "exploration:multi-playlist-sync.md"
+    },
+    {
+      "id": "F-017",
+      "spec": "docs/specs/F-017-multi-playlist-fetch.md",
+      "test_spec": "docs/specs/T-017-multi-playlist-fetch.md",
+      "description": "Multi-playlist Spotify fetch: fetchPlaylistTracks for /v1/playlists/{id}/tracks (mirrors F-005 mid-sweep design), playlist_membership join table, per-playlist cursor keys in sync_state, membership write piggybacks on Liked Songs fetch transaction (Q1=unify)",
+      "priority": 11,
+      "status": "pending",
+      "scope": [
+        "src/providers/spotify/playlists.ts",
+        "src/db/playlist_membership.ts",
+        "src/db/sync_state.ts",
+        "db/schema.sql",
+        "tests/providers/spotify/playlists.test.ts",
+        "tests/db/playlist_membership.test.ts",
+        "docs/specs/F-017-multi-playlist-fetch.md",
+        "docs/specs/T-017-multi-playlist-fetch.md"
+      ],
+      "depends_on": [
+        "F-016",
+        "F005"
+      ],
+      "assigned_to": null,
+      "test_file": null,
+      "coverage": null,
+      "notes": "Phase B Agent Team teammate scope. Mirrors F-005's mid-sweep continuation pattern (cursor + resume_url + sweep_max keyed by playlist id). Critical I-005 invariant: tracks upsert + membership upsert + cursor advance MUST be atomic on the last fetched page. Test must use the captureStateWrites pattern from F-015 (filter writes by key, not by call order). Liked Songs membership write happens in orchestrator post-fetch step (do not modify src/providers/spotify/liked.ts core). Live Neon migration (CREATE TABLE playlist_membership + 2 indices + Q4 backfill INSERT) deferred until Ovidiu present.",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [],
+      "failure_reason": null,
+      "discovered_via": "exploration:multi-playlist-sync.md"
+    },
+    {
+      "id": "F-018",
+      "spec": "docs/specs/F-018-multi-playlist-write.md",
+      "test_spec": "docs/specs/T-018-multi-playlist-write.md",
+      "description": "Multi-playlist Tidal write: generalise writePlaylist(env) -> writePlaylist(env, spotifyPlaylistId, tidalPlaylistId|null); auto-create Tidal playlist on first sync; selectUnsyncedMatchesForPlaylist replaces global last_playlist_write_at watermark with per-row playlist_membership.synced_at marker",
+      "priority": 12,
+      "status": "pending",
+      "scope": [
+        "src/sync/playlist-writer.ts",
+        "src/db/matches.ts",
+        "tests/sync/playlist-writer.test.ts",
+        "tests/db/matches.test.ts",
+        "docs/specs/F-018-multi-playlist-write.md",
+        "docs/specs/T-018-multi-playlist-write.md"
+      ],
+      "depends_on": [
+        "F-016",
+        "F008"
+      ],
+      "assigned_to": null,
+      "test_file": null,
+      "coverage": null,
+      "notes": "Phase B Agent Team teammate scope. Independent of F-017's scope (different files). Auto-create on tidal_playlist_id IS NULL; persist back to playlist_configs. selectUnsyncedMatchesForPlaylist joins playlist_membership x matches WHERE synced_at IS NULL AND NOT tidal_id_invalid. Per-row UPDATE playlist_membership SET synced_at=now() replaces the global watermark advance. Q1=unify means __liked__ uses the same code path as extras (no special branch).",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [],
+      "failure_reason": null,
+      "discovered_via": "exploration:multi-playlist-sync.md"
+    },
+    {
+      "id": "F-016b",
+      "spec": "docs/specs/F-009-sync-orchestration.md (amendment); docs/specs/F-016-playlist-config.md (orchestrator section)",
+      "test_spec": "docs/specs/T-009-sync-orchestration.md (extension)",
+      "description": "Orchestrator multi-playlist loop: runSyncBody calls seedPlaylistConfigs at top, fetches up to MAX_PLAYLISTS_PER_RUN playlists per tick, runs the global match queue once, then writes each configured playlist via F-018",
+      "priority": 13,
+      "status": "pending",
+      "scope": [
+        "src/sync/orchestrator.ts",
+        "tests/sync/orchestrator.test.ts",
+        "docs/specs/F-009-sync-orchestration.md",
+        "docs/specs/F-016-playlist-config.md"
+      ],
+      "depends_on": [
+        "F-016",
+        "F-017",
+        "F-018",
+        "F-015"
+      ],
+      "assigned_to": null,
+      "test_file": null,
+      "coverage": null,
+      "notes": "Phase C single-session. Must NOT regress F-009 M5 (discriminated error_code) — that fix lands as a separate Sprint 7 follow-up before this feature starts. Subrequest budget tests: 4 playlists at MAX_PLAYLISTS_PER_RUN=3 → 3 fetched + 1 deferred to next tick; subrequest count stays under ~20 with the existing F-015 ISRC/fuzzy caps shared globally. Phase D deploy follows immediately after this lands and merges.",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [],
+      "failure_reason": null,
+      "discovered_via": "exploration:multi-playlist-sync.md"
     }
   ]
 }
