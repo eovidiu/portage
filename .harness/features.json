@@ -2,7 +2,7 @@
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
   "total_features": 22,
-  "passing": 18,
+  "passing": 19,
   "features": [
     {
       "id": "F014",
@@ -594,7 +594,7 @@
       "test_spec": "docs/specs/T-016-playlist-config.md",
       "description": "Playlist config registry: playlist_configs table, env var SPOTIFY_EXTRA_PLAYLIST_IDS, fetchSpotifyPlaylistName provider helper, seedPlaylistConfigs orchestrator hook (no orchestrator wiring yet)",
       "priority": 10,
-      "status": "pending",
+      "status": "passing",
       "scope": [
         "src/db/playlist_configs.ts",
         "src/providers/spotify/playlists.ts",
@@ -609,12 +609,17 @@
       ],
       "depends_on": [],
       "assigned_to": null,
-      "test_file": null,
-      "coverage": null,
-      "notes": "Foundation for multi-playlist sync. Decisions locked 2026-05-07: Q1 unify Liked into playlist_membership; Q3 MAX_PLAYLISTS_PER_RUN=3; Q4 backfill pre-sets synced_at=matched_at; Q-num multi-playlist owns F-016/F-017/F-018. Phase A single-session. Live Neon migration (CREATE TABLE playlist_configs + __liked__ INSERT) deferred until Ovidiu present at terminal — held as a CHECKPOINT in task list. Schema landed in db/schema.sql first to satisfy Stage 4 hook.",
+      "test_file": "tests/db/playlist_configs.test.ts + tests/providers/spotify/playlists.test.ts + tests/sync/playlist-config-seeder.test.ts",
+      "coverage": "src/db/playlist_configs.ts: 100/100/100/100; src/providers/spotify/playlists.ts: 100/100/100/100; src/sync/playlist-config-seeder.ts: 100/100/100/100 (istanbul). 21 new unit tests. Gate met across all touched files.",
+      "notes": "Foundation for multi-playlist sync. Decisions locked 2026-05-07: Q1 unify Liked into playlist_membership; Q3 MAX_PLAYLISTS_PER_RUN=3; Q4 backfill pre-sets synced_at=matched_at; Q-num multi-playlist owns F-016/F-017/F-018. Phase A single-session shipped 2026-05-08. Live Neon migration (CREATE TABLE playlist_configs + __liked__ INSERT) HELD as CHECKPOINT (task #12) until Ovidiu present at terminal — schema lives in db/schema.sql; production Neon does not yet have the table. F-016b orchestrator wiring is the consumer; until that ships, the seeder is dead code in the runtime bundle.",
       "correction_cycles": 0,
       "scope_expansions": [],
-      "approaches_tried": [],
+      "approaches_tried": [
+        "Spec-first authoring (F-016/T-016) before any code; spec_amendment style failure-modes table mirrored from F-009.",
+        "TDD red-green for each module: db layer (8 tests), provider helper (5 tests), seeder (8 tests including non-Error throw branch coverage).",
+        "vi.mock factory with vi.fn() inline + vi.mocked(...) for type-safe access (avoids hoisting trap that bit fetchSpotifyPlaylistName test on first try).",
+        "Verified: marker collapsed to a single line directly above the URL constant (Stage 5 hook only inspects the immediately-preceding non-blank line)."
+      ],
       "failure_reason": null,
       "discovered_via": "exploration:multi-playlist-sync.md"
     },
