@@ -111,6 +111,24 @@ CREATE TABLE IF NOT EXISTS oauth_state (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- F-016: playlist config registry. One row per Spotify playlist this deployment
+-- syncs into Tidal: the synthetic '__liked__' row for Liked Songs, plus extras
+-- declared via env.SPOTIFY_EXTRA_PLAYLIST_IDS. tidal_playlist_id is NULL until
+-- the Tidal counterpart is created (F-018 owns the create-on-first-sync flow).
+CREATE TABLE IF NOT EXISTS playlist_configs (
+    spotify_playlist_id   TEXT PRIMARY KEY,
+    spotify_name          TEXT NOT NULL,
+    tidal_playlist_id     TEXT,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_synced_at        TIMESTAMPTZ
+);
+
+-- F-016-R2: synthetic '__liked__' row is the stable key for Liked Songs.
+-- Idempotent — repeat schema applies leave the row unchanged.
+INSERT INTO playlist_configs (spotify_playlist_id, spotify_name)
+VALUES ('__liked__', 'Spotify Liked')
+ON CONFLICT (spotify_playlist_id) DO NOTHING;
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_oauth_state_expires_at ON oauth_state(expires_at);
 CREATE INDEX IF NOT EXISTS idx_tracks_isrc          ON tracks(isrc) WHERE isrc IS NOT NULL;

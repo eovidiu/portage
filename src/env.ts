@@ -18,4 +18,8 @@ export interface Env {
   MATCH_BATCH_ISRC?: string;
   /** Per-invocation fuzzy match queue size. Defaults to 5. (F-015) */
   MATCH_BATCH_FUZZY?: string;
+  /** Comma-separated Spotify playlist IDs to sync beyond Liked Songs. (F-016) */
+  SPOTIFY_EXTRA_PLAYLIST_IDS?: string;
+  /** Maximum playlists processed per orchestrator invocation. Defaults to 3. (F-016) */
+  MAX_PLAYLISTS_PER_RUN?: string;
 }
