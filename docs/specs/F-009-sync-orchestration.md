@@ -144,3 +144,54 @@ FROM sync_runs, jsonb_array_elements(error_details) AS detail
 WHERE status = 'partial' AND started_at > NOW() - INTERVAL '7 days'
 GROUP BY 1 ORDER BY 2 DESC;
 ```
+
+## Amendment 2026-05-08 (M5): outer-error attribution discrimination
+
+Sprint 6 review surfaced that the orchestrator's outer try/catch hardcoded
+`error_code = 'spotify_reauth_required'` on every fetch failure. This conflated
+genuine reauth requirements with transient network failures, ciphertext
+decryption errors, and generic upstream errors — making the failure-modes
+table aspirational rather than authoritative. This amendment makes the outer
+classifier discriminating per the failure-modes table.
+
+### R15 — Outer-error classifier
+
+The outer try/catch wrapping the F-005 fetch call MUST classify the thrown
+error and set `sync_runs.error_code` per this table:
+
+| Thrown by | error_code |
+|---|---|
+| `SpotifyAuthError` with `code === "reauth_required"` (no tokens, refresh returned `invalid_grant`) | `spotify_reauth_required` |
+| `SpotifyAuthError` with `code === "refresh_failed"` (refresh endpoint 5xx, network) | `spotify_transient` |
+| Generic `Error` whose message matches `/rate limit|Spotify API error.*: 5\d\d/` (raised by `fetchPage`) | `spotify_transient` |
+| `IntegrityError` from F-004 token decrypt | `decrypt_failed` |
+| Any other thrown value (Error or non-Error) | `fetch_failed` |
+
+The classifier MUST be exhaustive — every code path through the outer catch
+MUST set one of the five codes above. The hardcoded `spotify_reauth_required`
+fallback is removed.
+
+### Failure modes (extended)
+
+| Mode | Cause | Recovery |
+|---|---|---|
+| `skipped_locked` | Concurrent run | Next scheduled run picks up |
+| `abandoned` | Worker died mid-run | Next run cleans up the orphan and proceeds |
+| `wall_time_exceeded` | Very large catch-up batch | Next run continues from cursor |
+| `spotify_reauth_required` | Spotify token unrecoverable | Operator runs `GET /auth/spotify` |
+| `tidal_reauth_required` | Tidal token unrecoverable | Operator runs `GET /auth/tidal` |
+| `spotify_transient` (NEW) | Refresh 5xx, Spotify 5xx, second 429 | Next cron tick retries; no operator action |
+| `decrypt_failed` (NEW) | TOKEN_ENCRYPTION_KEY rotation or ciphertext corruption | Operator investigates secret; may need re-mint + re-OAuth |
+| `fetch_failed` (NEW) | Generic fetch failure outside known buckets | Operator inspects logs |
+
+### Test gates
+
+- T-009-05a: `SpotifyAuthError("reauth_required", ...)` → `spotify_reauth_required`
+- T-009-05b: `SpotifyAuthError("refresh_failed", ...)` → `spotify_transient`
+- T-009-05c: `IntegrityError(...)` → `decrypt_failed`
+- T-009-05d: `Error("Spotify API error: 503")` → `spotify_transient`
+- T-009-05e: `Error("Spotify rate limit: second 429 received...")` → `spotify_transient`
+- T-009-05f: `Error("any other message")` → `fetch_failed`
+- T-009-05g: non-Error throw (e.g. string) → `fetch_failed`
+
+Per-track codes (R14) inside `error_details[]` are unchanged by this amendment.
