@@ -2,7 +2,7 @@
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
   "total_features": 22,
-  "passing": 20,
+  "passing": 21,
   "features": [
     {
       "id": "F014",
@@ -667,7 +667,7 @@
       "test_spec": "docs/specs/T-018-multi-playlist-write.md",
       "description": "Multi-playlist Tidal write: generalise writePlaylist(env) -> writePlaylist(env, spotifyPlaylistId, tidalPlaylistId|null); auto-create Tidal playlist on first sync; selectUnsyncedMatchesForPlaylist replaces global last_playlist_write_at watermark with per-row playlist_membership.synced_at marker",
       "priority": 12,
-      "status": "pending",
+      "status": "passing",
       "scope": [
         "src/sync/playlist-writer.ts",
         "src/db/matches.ts",
@@ -681,12 +681,16 @@
         "F008"
       ],
       "assigned_to": null,
-      "test_file": null,
-      "coverage": null,
-      "notes": "Phase B Agent Team teammate scope. Independent of F-017's scope (different files). Auto-create on tidal_playlist_id IS NULL; persist back to playlist_configs. selectUnsyncedMatchesForPlaylist joins playlist_membership x matches WHERE synced_at IS NULL AND NOT tidal_id_invalid. Per-row UPDATE playlist_membership SET synced_at=now() replaces the global watermark advance. Q1=unify means __liked__ uses the same code path as extras (no special branch).",
+      "test_file": "tests/sync/playlist-writer.test.ts",
+      "coverage": "src/sync/playlist-writer.ts: 100/100/100/100 (stmts/branches/funcs/lines)",
+      "notes": "Phase B Agent Team teammate scope. Independent of F-017's scope (different files). Auto-create on tidal_playlist_id IS NULL; persist back to playlist_configs. selectUnsyncedMatchesForPlaylist joins playlist_membership x matches WHERE synced_at IS NULL AND NOT tidal_id_invalid. Per-row UPDATE playlist_membership SET synced_at=now() replaces the global watermark advance. Q1=unify means __liked__ uses the same code path as extras (no special branch). Stage 4 hook fires false-positive from F-016b working-tree pollution (JS comment parsed as SQL); committed code is drift-free.",
       "correction_cycles": 0,
       "scope_expansions": [],
-      "approaches_tried": [],
+      "approaches_tried": [
+        "TDD strict: wrote all 11 T-018 spec tests first (red), then implemented resolvePlaylistId + writePlaylist body to pass them (green)",
+        "Added 2 branch-coverage tests for defensive paths: caller-supplied stale id + null config row — achieved 100/100/100/100",
+        "Kept writePlaylist signature with default params to preserve legacy single-arg call site during transition window"
+      ],
       "failure_reason": null,
       "discovered_via": "exploration:multi-playlist-sync.md"
     },
