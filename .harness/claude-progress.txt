@@ -176,3 +176,22 @@ Suggested Sprint 7 team structure:
 - After M5: task #5 onward is F-016 Phase A. Spec → schema.sql → DB layer → provider helper → seeder → env. End-of-phase CHECKPOINT (task #12) is the live Neon migration; do not run mcp__Neon__run_sql for the DDL without Ovidiu present.
 - Open Telegram channel: chat_id 7899473049. Ovidiu paired this session and may resume via Telegram.
 - Open PR / branch creation deferred until F-016 code is locally green and Ovidiu approves the live migration.
+
+## Session 11 - F-009 M5 + F-016 Phase A shipped (2026-05-08)
+- Mode: single-session Opus. Plan-mode artifact: `.harness/explorations/multi-playlist-sync-IMPLEMENTATION-PLAN.md` (committed in S10). 12-task list executed end-to-end.
+- F-009 M5 (PR #8 squash-merged as commit bb66197): R15 outer-error classifier replaces hardcoded `error_code='spotify_reauth_required'` with `SpotifyAuthError`/`IntegrityError`/`Error`-message-based discrimination. Three new failure modes (`spotify_transient`, `decrypt_failed`, `fetch_failed`) added to the F-009 spec. 7 new T-009-05 cases (a..g) cover the classifier exhaustively. Coverage on src/sync/orchestrator.ts: 100/95/100/100 (gate met).
+- F-016 (PR #9 squash-merged as commit 6e0fb97): playlist_configs table + DB layer (5 helpers) + Spotify name fetch helper + seeder. 21 new unit tests across 3 files, all touched files at 100/100/100/100 coverage. Spec-first authoring (F-016 + T-016) preceded code. Verified: marker on Spotify URL constant satisfies Stage 5 hook.
+- Live Neon migration applied to production branch (br-sparkling-star-al5g4fzf): CREATE TABLE playlist_configs + INSERT '__liked__' row. Schema verified via information_schema.columns query — matches T-016-01. 1 row in playlist_configs after migration.
+- features.json: F-016 status flipped to passing; passing count 18 → 19 of 22.
+- Two commits squash-merged through PR workflow per Ovidiu's "per-feature branches → multiple PRs in dependency order" preference (PR #8 + PR #9).
+- Hook gates fired during work: Stage 5 (Verified-marker hook) caught a multi-line marker formatting issue on src/providers/spotify/playlists.ts (the marker MUST be on the immediately-preceding non-blank line). Fixed in one cycle by collapsing to a single-line preamble.
+- Telegram channel: chat_id 7899473049. Ovidiu paired in S10; allowlist policy active.
+- Tests: 558/558 unit passing on main. tsc clean. All 5 hook stages green throughout.
+
+## Next Session — F-017 + F-018 Phase B (Agent Team)
+- Phase B per the implementation plan: spawn an Agent Team (Sonnet x2) for F-017 and F-018 in parallel. Independent scopes (F-017 owns src/providers/spotify/playlists.ts extension + src/db/playlist_membership.ts + src/db/sync_state.ts + tests; F-018 owns src/sync/playlist-writer.ts + src/db/matches.ts + tests). No file overlap.
+- Phase B prereq: live Neon migration for F-017 (CREATE TABLE playlist_membership + 2 indices + Q4 backfill INSERT). Held as CHECKPOINT — apply with operator present at terminal during the F-017 PR cycle, same pattern as F-016.
+- After F-017+F-018 ship: Phase C single-session for F-016b orchestrator wiring (consumer of the seeder; subject to F-009 M5's discriminating classifier, do not regress).
+- Phase D production deploy with the F-015 playbook (manual smoke, wrangler tail watch, cron re-enable).
+- Sprint 7 minor follow-ups still open and orthogonal: F-012 M1 (candidates fetch), F-012 M2/M3 (R10/R11 fuzzy filter), F-013 M4 (R9 orphan ISRC UNION), M7 (HTTP route logging swallows). None block multi-playlist; interleave anytime.
+- Carry-over (long-running): F-Integ extension deferred since Sprint 5 (lock semantics integration coverage).
