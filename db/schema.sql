@@ -129,6 +129,29 @@ INSERT INTO playlist_configs (spotify_playlist_id, spotify_name)
 VALUES ('__liked__', 'Spotify Liked')
 ON CONFLICT (spotify_playlist_id) DO NOTHING;
 
+-- F-017: per-playlist track membership. Records which Spotify tracks belong
+-- to which Spotify playlists, and whether the corresponding Tidal counterpart
+-- has been written to the Tidal side yet. synced_at IS NULL means "in Spotify
+-- playlist, not yet written to Tidal". F-018's write pass is the only path
+-- that flips synced_at to a timestamp.
+CREATE TABLE IF NOT EXISTS playlist_membership (
+    spotify_playlist_id   TEXT NOT NULL REFERENCES playlist_configs(spotify_playlist_id),
+    spotify_track_id      TEXT NOT NULL REFERENCES tracks(spotify_id),
+    added_at              TIMESTAMPTZ NOT NULL,
+    synced_at             TIMESTAMPTZ,
+    PRIMARY KEY (spotify_playlist_id, spotify_track_id)
+);
+
+-- F-017-R6: partial index used by F-018's selectUnsyncedMatchesForPlaylist.
+CREATE INDEX IF NOT EXISTS idx_membership_unsynced
+    ON playlist_membership (spotify_playlist_id, synced_at)
+    WHERE synced_at IS NULL;
+
+-- F-017: covers the FK lookups when a track lifecycle event needs to enumerate
+-- every playlist it belongs to (future use).
+CREATE INDEX IF NOT EXISTS idx_membership_track
+    ON playlist_membership (spotify_track_id);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_oauth_state_expires_at ON oauth_state(expires_at);
 CREATE INDEX IF NOT EXISTS idx_tracks_isrc          ON tracks(isrc) WHERE isrc IS NOT NULL;
