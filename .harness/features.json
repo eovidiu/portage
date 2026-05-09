@@ -1,7 +1,7 @@
 {
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
-  "total_features": 22,
+  "total_features": 26,
   "passing": 22,
   "features": [
     {
@@ -726,6 +726,100 @@
       ],
       "failure_reason": null,
       "discovered_via": "exploration:multi-playlist-sync.md"
+    },
+    {
+      "id": "F-019",
+      "spec": "openspec/changes/portage-ui-foundation/specs/cf-access-auth/spec.md",
+      "test_spec": null,
+      "description": "Cloudflare Access JWT verification middleware + CORS for SPA origins",
+      "priority": 14,
+      "status": "pending",
+      "scope": [
+        "src/middleware/cf_access.ts",
+        "src/index.ts",
+        "tests/middleware/cf_access.test.ts",
+        "src/env.ts"
+      ],
+      "depends_on": [],
+      "assigned_to": null,
+      "test_file": null,
+      "coverage": null,
+      "notes": "Phase 0 of portage-ui-foundation OpenSpec change. Verifies Cf-Access-Jwt-Assertion against the team JWKS via jose createRemoteJWKSet (module-level cache TTL >= 10 min). Allows email == eovidiu@gmail.com only. Coexists with existing Bearer JWT path: if Cf-Access header present, verify it; else fall back to Bearer; else 401. Worker secrets CF_ACCESS_TEAM and CF_ACCESS_AUD required (Ovidiu sets up Zero Trust + Google IdP per design.md walkthrough — service-token bypass policy preserves Bearer for cron + iOS). CORS middleware allows https://app.portage.eovidiu.co.uk and http://localhost:5173. No-auth requests (other than /healthz, /auth/*/callback) return 401.",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [],
+      "failure_reason": null,
+      "discovered_via": "exploration:portage-ui-foundation"
+    },
+    {
+      "id": "F-020",
+      "spec": "openspec/changes/portage-ui-foundation/specs/api-me/spec.md",
+      "test_spec": null,
+      "description": "GET /api/me endpoint returning authenticated principal { email, kind }",
+      "priority": 14,
+      "status": "pending",
+      "scope": [
+        "src/routes/me.ts",
+        "src/index.ts",
+        "tests/routes/me.test.ts"
+      ],
+      "depends_on": ["F-019"],
+      "assigned_to": null,
+      "test_file": null,
+      "coverage": null,
+      "notes": "Phase 0 of portage-ui-foundation. Reads c.var.principal set by F-019 middleware. user kind returns { email, kind: 'user' }; service kind returns { kind: 'service' } with no email. SPA AuthGate calls this on mount and treats 401 as 'not signed in' (redirects to CF Access).",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [],
+      "failure_reason": null,
+      "discovered_via": "exploration:portage-ui-foundation"
+    },
+    {
+      "id": "F-021",
+      "spec": "openspec/changes/portage-ui-foundation/specs/playlists-list/spec.md",
+      "test_spec": null,
+      "description": "GET /api/playlists endpoint listing playlist_configs rows for the operator console",
+      "priority": 15,
+      "status": "pending",
+      "scope": [
+        "src/routes/playlists.ts",
+        "src/db/playlist_configs.ts",
+        "src/index.ts",
+        "tests/routes/playlists.test.ts"
+      ],
+      "depends_on": ["F-019"],
+      "assigned_to": null,
+      "test_file": null,
+      "coverage": null,
+      "notes": "Phase 4 of portage-ui-foundation. F-016b shipped (PR #14) so Phase 4 is no longer gated. Extends src/db/playlist_configs.ts with listAll(). Returns __liked__ row first, then extras by created_at. Authenticated only (F-019 enforces).",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [],
+      "failure_reason": null,
+      "discovered_via": "exploration:portage-ui-foundation"
+    },
+    {
+      "id": "F-022",
+      "spec": "openspec/changes/portage-ui-foundation/specs/playlists-add/spec.md",
+      "test_spec": null,
+      "description": "POST /api/playlists endpoint adding a Spotify playlist to the registry",
+      "priority": 15,
+      "status": "pending",
+      "scope": [
+        "src/routes/playlists.ts",
+        "src/db/playlist_configs.ts",
+        "tests/routes/playlists.test.ts"
+      ],
+      "depends_on": ["F-019", "F-016"],
+      "assigned_to": null,
+      "test_file": null,
+      "coverage": null,
+      "notes": "Phase 4 of portage-ui-foundation. Validates spotify_playlist_id against ^[A-Za-z0-9]{22}$ at the route layer; calls fetchSpotifyPlaylistName (F-016) to populate display_name. Idempotent on duplicate (returns 200 with existing row). Spotify 404 on the id maps to 404 spotify_playlist_not_found. Authenticated only.",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [],
+      "failure_reason": null,
+      "discovered_via": "exploration:portage-ui-foundation"
     }
   ]
 }
