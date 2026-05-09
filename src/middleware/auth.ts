@@ -19,6 +19,10 @@ export function jwtMiddleware(skipPaths: string[]): MiddlewareHandler<{ Bindings
       return next();
     }
 
+    if (c.get("principal" as never)) {
+      return next();
+    }
+
     const authHeader = c.req.header("Authorization");
     if (!authHeader) {
       return authReject("missing_token");
@@ -36,6 +40,7 @@ export function jwtMiddleware(skipPaths: string[]): MiddlewareHandler<{ Bindings
     try {
       const { subject } = await verifyJwt(token, c.env.JWT_SECRET);
       c.set("subject" as never, subject);
+      c.set("principal" as never, { kind: "service" });
     } catch (err) {
       const code = err instanceof AuthError ? err.code : "malformed_token";
       return authReject(code);
