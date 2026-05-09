@@ -215,3 +215,27 @@ Suggested Sprint 7 team structure:
   - F-013 M4: R9 orphan ISRC UNION — orphans bypass ISRC stage; fix is UNION in fetchNewTracks
   - M7: HTTP route logging swallows — orchestrator route ergonomics
 - **Harness debt**: schema-drift hook regex quirk (Stage 4) — needs SQL string vs JS identifier disambiguation. Document fix in a future PR or ticket.
+## Session 13 - portage-ui-foundation Worker side (F-019..F-022) shipped (2026-05-09)
+- Mode: single-session Opus throughout; harness-continue protocol used end-to-end.
+- Foundation step: authored OpenSpec change `openspec/changes/portage-ui-foundation/` (proposal + design + tasks + 10 capability spec deltas) before any code; `openspec validate` clean. Captured durable user feedback to auto-memory (separate UI repo, /opsx:propose workflow, phase isolation, security as named phase).
+- Registration step: F-019/F-020/F-021/F-022 added to features.json as `pending` with proper depends_on graph. context_summary.md updated. Released the F-019+ soft reservation that bidirectional-sync had on those numbers.
+- F-019 (commit b94d2e2 + harness 361c807): cf_access middleware + CORS. New file `src/middleware/cf_access.ts`; modified `src/middleware/auth.ts` (principal sentinel short-circuit + sets kind:"service" on Bearer success); modified `src/index.ts` (CORS first, then cfAccess, then jwt); extended `src/env.ts` with CF_ACCESS_TEAM/CF_ACCESS_AUD optional bindings. 20 unit tests (T-019-01..16, plus 03b/09b for branch coverage). cf_access.ts at 100/100/100/100; auth.ts at 95.23/83.33/100/95.23 (slight dip from new principal-set short-circuit branch). All 5 hook stages green.
+- F-020/F-021/F-022 (commit 1d7075f + harness c93d304): /api/me + /api/playlists list + add. Three small handlers shipped together since each is ~30 LOC and they share `src/index.ts` mount churn. me.ts at 100/100/100/100; playlists.ts at 96.96/94.73/100/100. Tests: 14 new T-020/T-021/T-022 cases including malformed body, idempotent duplicate, Spotify 404 vs 5xx classification.
+- Tests: 589 (entry) → 637 (exit). All passing. tsc clean. 5 Stage hook gates green throughout.
+- features.json: 22/22 → 26/26 passing. All Worker-side features for portage-ui-foundation are now in.
+- Edit-tool gotcha encountered: "File has not been read yet" when files are modified by harness hooks or parallel sessions between Read and Edit calls. Re-read before retry resolves it. Add to Meta-Patterns.
+
+## Next Session — portage-ui SPA repo (separate Claude Code session)
+- **First action**: from `portage/`, `gh repo create eovidiu/portage-ui --private --description "Portage UI"` and `git clone` it as a sibling directory to `portage/`. Set git config user.email eovidiu@gmail.com on the new clone.
+- Open a NEW Claude Code session rooted in `portage-ui/`. From that session:
+  - Run `/harness-init` to bootstrap `.harness/{features.json,context_summary.md,init.sh,claude-progress.txt}` for the UI repo.
+  - Register UI-PHASE-1, UI-PHASE-2, UI-PHASE-3, UI-PHASE-5, UI-PHASE-7 features with scopes pulled from `openspec/changes/portage-ui-foundation/tasks.md` sections 2–7 (UI-PHASE-4 register too, but mark depends_on as documentation note since the dep is in another repo).
+  - Copy `openspec/changes/portage-ui-foundation/` into the new repo so the UI session has the canonical specs locally.
+  - Run `/harness-continue` — the harness will orchestrate the four parallel UI phase teammates.
+- **Cloudflare Zero Trust + Google IdP setup** (operator UI clicks ~5 min): walkthrough lives in `openspec/changes/portage-ui-foundation/design.md` lines 200+. Required before the SPA can authenticate via CF Access. Worker secrets `CF_ACCESS_TEAM` and `CF_ACCESS_AUD` need to be set via `wrangler secret put` after Zero Trust application is created.
+- **Sprint 7 minor follow-ups still open** (none block the UI work; interleave anytime):
+  - F-012 M1: R3/R4 candidates fetch returns [] — needs real candidate fetch via F-007 search reuse with 10s timeout
+  - F-012 M2/M3: R10/R11 fuzzy filter — skipped + within-7-day-pending exclusion (predicate shared with fetchPendingMatchQueue, partially landed in F-015)
+  - F-013 M4: R9 orphan ISRC UNION — orphans bypass ISRC stage; fix is UNION in fetchNewTracks
+  - M7: HTTP route logging swallows — orchestrator route ergonomics
+- **Harness debt** (carry over from S12): schema-drift hook regex quirk (Stage 4) — needs SQL string vs JS identifier disambiguation. Plus Edit-tool stale-state issue noted above.
