@@ -2,7 +2,7 @@
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
   "total_features": 22,
-  "passing": 21,
+  "passing": 22,
   "features": [
     {
       "id": "F014",
