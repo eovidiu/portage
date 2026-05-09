@@ -1,4 +1,4 @@
-import { Pool, type PoolClient } from "@neondatabase/serverless";
+import { neon, Pool, type PoolClient } from "@neondatabase/serverless";
 import type { Env } from "../env";
 import {
   insertRun,
@@ -12,6 +12,9 @@ import { IntegrityError } from "../crypto";
 import { matchByIsrc } from "../match/isrc";
 import { matchByFuzzy } from "../match/fuzzy";
 import { writePlaylist } from "./playlist-writer";
+import { seedPlaylistConfigs } from "./playlist-config-seeder";
+import { listPlaylistConfigs } from "../db/playlist_configs";
+import { fetchPlaylistTracks } from "../providers/spotify/playlists";
 
 export type OrchestratorOutcome =
   | "succeeded"
@@ -50,6 +53,8 @@ const DEFAULT_WALL_TIME_MS = 300_000;
 const DEFAULT_MATCH_BATCH_ISRC = 5;
 const DEFAULT_MATCH_BATCH_FUZZY = 5;
 const DEFAULT_LIKED_PAGES_PER_RUN = 1;
+// F-016b/F-009-R20: max extra playlists per invocation (not counting __liked__).
+const DEFAULT_MAX_PLAYLISTS_PER_RUN = 3;
 
 function readBudget(raw: string | undefined, fallback: number): number {
   if (raw === undefined) return fallback;
@@ -132,10 +137,27 @@ async function runSyncBody(
   const isrcBatch = readBudget(env.MATCH_BATCH_ISRC, DEFAULT_MATCH_BATCH_ISRC);
   const fuzzyBatch = readBudget(env.MATCH_BATCH_FUZZY, DEFAULT_MATCH_BATCH_FUZZY);
   const likedPages = readBudget(env.LIKED_PAGES_PER_RUN, DEFAULT_LIKED_PAGES_PER_RUN);
+  // F-009-R20: cap of extras per invocation; __liked__ is always included on top.
+  const maxPlaylists = readBudget(env.MAX_PLAYLISTS_PER_RUN, DEFAULT_MAX_PLAYLISTS_PER_RUN);
 
+  // F-009-R16: seed playlist_configs before any fetch so __liked__ row exists
+  // and any new SPOTIFY_EXTRA_PLAYLIST_IDS entries are upserted. Idempotent.
+  await seedPlaylistConfigs(env);
+
+  // F-009-R17: list configs and split into __liked__ + extras (capped).
+  const sql = neon(env.DATABASE_URL);
+  const configs = await listPlaylistConfigs(sql);
+  const liked = configs.find((c) => c.spotify_playlist_id === "__liked__");
+  const extras = configs
+    .filter((c) => c.spotify_playlist_id !== "__liked__")
+    .slice(0, maxPlaylists - 1);
+
+  // Fetch __liked__ first; a failure here aborts the whole run (R15 path).
+  let likedTracksSeen = 0;
   let fetchResult: Awaited<ReturnType<typeof fetchLikedSongs>>;
   try {
     fetchResult = await fetchLikedSongs(env, likedPages);
+    likedTracksSeen = fetchResult.tracksInserted;
   } catch (err) {
     const errorCode = classifyFetchError(err);
     await updateRun(env, runId, {
@@ -155,10 +177,58 @@ async function runSyncBody(
     return { outcome: "failed", run_id: runId, error_code: errorCode };
   }
 
+  // F-009-R18: post-fetch __liked__ membership upsert. After fetchLikedSongs
+  // returns, backfill playlist_membership for any tracks not already present.
+  // One DB round-trip per run; idempotent via LEFT JOIN + ON CONFLICT DO NOTHING.
+  await sql(
+    `INSERT INTO playlist_membership (spotify_playlist_id, spotify_track_id, added_at, synced_at)
+     SELECT '__liked__', t.spotify_id, t.spotify_added_at, NULL
+     FROM tracks t
+     LEFT JOIN playlist_membership pm
+       ON pm.spotify_playlist_id = '__liked__' AND pm.spotify_track_id = t.spotify_id
+     WHERE pm.spotify_track_id IS NULL
+     ON CONFLICT DO NOTHING`,
+    [],
+  );
+
+  // F-009-R17 extras: fetch each extra playlist, logging errors without aborting.
+  let extrasTracksSeen = 0;
+  for (const config of extras) {
+    try {
+      const extraResult = await fetchPlaylistTracks(
+        env,
+        config.spotify_playlist_id,
+        likedPages,
+      );
+      extrasTracksSeen += extraResult.tracksInserted;
+    } catch (err) {
+      const errorCode = classifyFetchError(err);
+      console.log(
+        JSON.stringify({
+          event: "playlist_fetch_failed",
+          run_id: runId,
+          spotify_playlist_id: config.spotify_playlist_id,
+          error_code: errorCode,
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
+  }
+
+  // F-009-R19: global ISRC + fuzzy match queue runs once, shared across all
+  // playlists. Matching is not per-playlist.
   const isrcQueue = await fetchPendingMatchQueue(env, isrcBatch);
 
-  let isrcResult = { matched: 0, skipped: 0, errors: [] as Array<{ spotify_id: string; error_code: string; message: string }> };
-  let fuzzyResult = { matched: 0, unmatched: 0, errors: [] as Array<{ spotify_id: string; error_code: string; message: string }> };
+  let isrcResult = {
+    matched: 0,
+    skipped: 0,
+    errors: [] as Array<{ spotify_id: string; error_code: string; message: string }>,
+  };
+  let fuzzyResult = {
+    matched: 0,
+    unmatched: 0,
+    errors: [] as Array<{ spotify_id: string; error_code: string; message: string }>,
+  };
 
   try {
     isrcResult = await matchByIsrc(env, isrcQueue, runId);
@@ -184,31 +254,48 @@ async function runSyncBody(
   const totalErrors = allErrors.length;
   const tracksUnmatched = fuzzyResult.unmatched;
 
-  try {
-    const playlistResult = await writePlaylist(env);
-    console.log(
-      JSON.stringify({
-        event: "playlist_write_completed",
-        run_id: runId,
-        playlist_id: playlistResult.playlistId,
-        added: playlistResult.added,
-        skipped_duplicates: playlistResult.skippedDuplicates,
-        invalid_ids: playlistResult.invalidIds.length,
-        errors: playlistResult.errors,
-      }),
-    );
-  } catch (err) {
-    console.log(
-      JSON.stringify({
-        event: "playlist_write_failed",
-        run_id: runId,
-        message: err instanceof Error ? err.message : String(err),
-      }),
-    );
+  // F-009-R19 write loop: iterate the same playlist set processed in the fetch
+  // loop. Per-playlist write failures are logged but do not abort the run.
+  const playlistsToWrite = liked
+    ? [liked, ...extras]
+    : extras;
+
+  for (const config of playlistsToWrite) {
+    try {
+      const playlistResult = await writePlaylist(
+        env,
+        config.spotify_playlist_id,
+        config.tidal_playlist_id,
+      );
+      console.log(
+        JSON.stringify({
+          event: "playlist_write_completed",
+          run_id: runId,
+          spotify_playlist_id: config.spotify_playlist_id,
+          playlist_id: playlistResult.playlistId,
+          added: playlistResult.added,
+          skipped_duplicates: playlistResult.skippedDuplicates,
+          invalid_ids: playlistResult.invalidIds.length,
+          errors: playlistResult.errors,
+        }),
+      );
+    } catch (err) {
+      console.log(
+        JSON.stringify({
+          event: "playlist_write_failed",
+          run_id: runId,
+          spotify_playlist_id: config.spotify_playlist_id,
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
   }
 
-  // F-009 spec: status='partial' requires errors>0 AND progress>0; with
-  // errors but zero progress, the run is 'failed' per the state-machine
+  // F-009-R22: aggregate counts across all playlists into a single sync_runs row.
+  const totalTracksSeen = likedTracksSeen + extrasTracksSeen;
+
+  // F-009 spec: status='partial' requires (errors > 0 AND progress > 0); with
+  // errors but zero progress the run is 'failed' per the state-machine
   // diagram in architecture.md §8.1.
   const progress =
     isrcResult.matched +
@@ -222,7 +309,7 @@ async function runSyncBody(
   await updateRun(env, runId, {
     status,
     finished_at: finishedAt,
-    tracks_seen: fetchResult.tracksInserted,
+    tracks_seen: totalTracksSeen,
     matched_isrc: isrcResult.matched,
     matched_fuzzy: fuzzyResult.matched,
     unmatched: tracksUnmatched,
@@ -233,7 +320,7 @@ async function runSyncBody(
   const result: OrchestratorResult = {
     outcome: status,
     run_id: runId,
-    tracks_seen: fetchResult.tracksInserted,
+    tracks_seen: totalTracksSeen,
     matched_isrc: isrcResult.matched,
     matched_fuzzy: fuzzyResult.matched,
     unmatched: tracksUnmatched,

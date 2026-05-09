@@ -4,8 +4,9 @@ import type { Env } from "../../src/env";
 // All upstream modules are mocked so F-009 never touches real DB or providers.
 // The orchestrator uses BOTH the HTTP driver (`neon()`) for stateless queries
 // and the WebSocket driver (`Pool`) for the session-scoped advisory lock pair.
-// We mock both surfaces. mockSql controls the HTTP path (fetchNewTracks);
-// mockClient.query controls the lock pair (pg_try_advisory_lock + pg_advisory_unlock).
+// We mock both surfaces. mockSql controls the HTTP path (fetchNewTracks,
+// listPlaylistConfigs, membership upsert); mockClient.query controls the lock
+// pair (pg_try_advisory_lock + pg_advisory_unlock).
 const mockSql = vi.fn();
 const mockClient = {
   query: vi.fn(),
@@ -42,6 +43,20 @@ vi.mock("../../src/sync/playlist-writer", () => ({
   writePlaylist: vi.fn(),
 }));
 
+// F-016b: new mocks for seeder, playlist configs DB, and multi-playlist fetch.
+vi.mock("../../src/sync/playlist-config-seeder", () => ({
+  seedPlaylistConfigs: vi.fn(),
+}));
+
+vi.mock("../../src/db/playlist_configs", () => ({
+  listPlaylistConfigs: vi.fn(),
+}));
+
+vi.mock("../../src/providers/spotify/playlists", () => ({
+  fetchPlaylistTracks: vi.fn(),
+  fetchSpotifyPlaylistName: vi.fn(),
+}));
+
 import { runSync } from "../../src/sync/orchestrator";
 import { Pool } from "@neondatabase/serverless";
 import { insertRun, updateRun, markAbandonedRuns } from "../../src/db/sync_runs";
@@ -49,16 +64,22 @@ import { fetchLikedSongs } from "../../src/providers/spotify/liked";
 import { matchByIsrc } from "../../src/match/isrc";
 import { matchByFuzzy } from "../../src/match/fuzzy";
 import { writePlaylist } from "../../src/sync/playlist-writer";
+import { seedPlaylistConfigs } from "../../src/sync/playlist-config-seeder";
+import { listPlaylistConfigs } from "../../src/db/playlist_configs";
+import { fetchPlaylistTracks } from "../../src/providers/spotify/playlists";
 
 const PoolCtor = Pool as unknown as ReturnType<typeof vi.fn>;
 
-const mockInsertRun = insertRun as ReturnType<typeof vi.fn>;
-const mockUpdateRun = updateRun as ReturnType<typeof vi.fn>;
-const mockMarkAbandoned = markAbandonedRuns as ReturnType<typeof vi.fn>;
-const mockFetchLikedSongs = fetchLikedSongs as ReturnType<typeof vi.fn>;
-const mockMatchByIsrc = matchByIsrc as ReturnType<typeof vi.fn>;
-const mockMatchByFuzzy = matchByFuzzy as ReturnType<typeof vi.fn>;
-const mockWritePlaylist = writePlaylist as ReturnType<typeof vi.fn>;
+const mockInsertRun = vi.mocked(insertRun);
+const mockUpdateRun = vi.mocked(updateRun);
+const mockMarkAbandoned = vi.mocked(markAbandonedRuns);
+const mockFetchLikedSongs = vi.mocked(fetchLikedSongs);
+const mockMatchByIsrc = vi.mocked(matchByIsrc);
+const mockMatchByFuzzy = vi.mocked(matchByFuzzy);
+const mockWritePlaylist = vi.mocked(writePlaylist);
+const mockSeedPlaylistConfigs = vi.mocked(seedPlaylistConfigs);
+const mockListPlaylistConfigs = vi.mocked(listPlaylistConfigs);
+const mockFetchPlaylistTracks = vi.mocked(fetchPlaylistTracks);
 
 function makeEnv(): Env {
   return {
@@ -76,14 +97,33 @@ function makeEnv(): Env {
   };
 }
 
+// Default playlist configs returned by listPlaylistConfigs mock: just __liked__.
+const DEFAULT_CONFIGS = [
+  {
+    spotify_playlist_id: "__liked__",
+    spotify_name: "Spotify Liked",
+    tidal_playlist_id: "tidal-liked-001",
+    created_at: "2026-05-01T00:00:00Z",
+    last_synced_at: null,
+  },
+];
+
 // Set up the lock + HTTP-query sequence for a standard successful run.
 // mockClient.query handles the WS-session lock pair (acquire + unlock).
-// mockSql handles the HTTP-driver queries (fetchNewTracks).
+// mockSql handles the HTTP-driver queries (listPlaylistConfigs SELECT,
+// membership upsert INSERT, fetchPendingMatchQueue SELECT).
 function setupSqlSuccess() {
   mockClient.query
     .mockResolvedValueOnce({ rows: [{ acquired: true }] }) // pg_try_advisory_lock
     .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] }); // pg_advisory_unlock
-  mockSql.mockResolvedValueOnce([]); // fetchNewTracks
+  // mockSql call sequence inside runSyncBody:
+  // 1. listPlaylistConfigs SELECT (returns playlist rows)
+  // 2. __liked__ membership upsert INSERT...SELECT (R18)
+  // 3. fetchPendingMatchQueue SELECT (returns [] for no pending tracks)
+  mockSql
+    .mockResolvedValueOnce(DEFAULT_CONFIGS)  // listPlaylistConfigs
+    .mockResolvedValueOnce([])               // __liked__ membership upsert
+    .mockResolvedValueOnce([]);              // fetchPendingMatchQueue
 }
 
 // Set up provider/db mocks for a successful run with optional overrides.
@@ -94,14 +134,31 @@ function setupProviders(overrides: {
   fuzzyMatched?: number;
   fuzzyUnmatched?: number;
   fuzzyErrors?: Array<{ spotify_id: string; error_code: string; message: string }>;
+  playlistConfigs?: Array<{
+    spotify_playlist_id: string;
+    spotify_name: string;
+    tidal_playlist_id: string | null;
+    created_at: string;
+    last_synced_at: string | null;
+  }>;
 } = {}) {
   mockMarkAbandoned.mockResolvedValue(0);
   mockInsertRun.mockResolvedValue({ run_id: "run-001" });
   mockUpdateRun.mockResolvedValue(undefined);
+  mockSeedPlaylistConfigs.mockResolvedValue(undefined);
+  mockListPlaylistConfigs.mockResolvedValue(
+    overrides.playlistConfigs ?? DEFAULT_CONFIGS,
+  );
   mockFetchLikedSongs.mockResolvedValue({
     pagesProcessed: 1,
     tracksInserted: overrides.tracksInserted ?? 5,
     tracksSkipped: 0,
+  });
+  mockFetchPlaylistTracks.mockResolvedValue({
+    pagesProcessed: 1,
+    tracksInserted: 0,
+    tracksSkipped: 0,
+    morePagesPending: false,
   });
   mockMatchByIsrc.mockResolvedValue({
     matched: overrides.isrcMatched ?? 3,
@@ -129,6 +186,10 @@ beforeEach(() => {
   PoolCtor.mockImplementation(() => mockPool);
   mockPool.connect.mockResolvedValue(mockClient);
   mockPool.end.mockResolvedValue(undefined);
+  // F-016b: mockSql is also used by listPlaylistConfigs inside the module,
+  // but those calls go through the module mock; mockSql is the raw neon() surface
+  // for direct SQL calls in the orchestrator (membership upsert, fetchPendingMatchQueue).
+  mockSql.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -443,11 +504,14 @@ describe("T-009-11: Wall-time cap reflected in run status", () => {
     mockMarkAbandoned.mockResolvedValue(0);
     mockInsertRun.mockResolvedValue({ run_id: "run-timeout" });
     mockUpdateRun.mockResolvedValue(undefined);
+    // F-016b: seed + list needed before fetchLikedSongs is reached
+    mockSeedPlaylistConfigs.mockResolvedValue(undefined);
+    mockListPlaylistConfigs.mockResolvedValue(DEFAULT_CONFIGS);
     // fetchLikedSongs never resolves (simulates long-running fetch)
     mockFetchLikedSongs.mockImplementation(
       () => new Promise<never>(() => { /* intentionally hangs */ }),
     );
-    // Lock pair on Pool/client; HTTP-driver query (fetchNewTracks) on mockSql.
+    // Lock pair on Pool/client; HTTP-driver query on mockSql.
     mockClient.query.mockResolvedValue({ rows: [{ acquired: true, pg_advisory_unlock: true }] });
     mockSql.mockResolvedValue([]);
 
@@ -606,9 +670,13 @@ describe("F-015: bounded per-invocation budgets", () => {
 
     // fetchLikedSongs called with maxPages = 1
     expect(mockFetchLikedSongs).toHaveBeenCalledWith(expect.anything(), 1);
-    // fetchPendingMatchQueue: first non-lock neon() query, params = [5]
-    const queueCall = mockSql.mock.calls[0] as [string, unknown[]];
-    expect(queueCall[1]).toEqual([5]);
+    // fetchPendingMatchQueue: find the neon() call whose params are [N] (the queue limit).
+    // mockSql call[0] is the __liked__ membership upsert; call[1] is fetchPendingMatchQueue.
+    const queueCall = mockSql.mock.calls.find(
+      (call) => Array.isArray(call[1]) && (call[1] as unknown[]).length === 1 && typeof (call[1] as unknown[])[0] === "number",
+    ) as [string, unknown[]] | undefined;
+    expect(queueCall).toBeDefined();
+    expect(queueCall![1]).toEqual([5]);
     // matchByFuzzy called with options.limit = 5
     expect(mockMatchByFuzzy).toHaveBeenCalledWith(
       expect.anything(),
@@ -624,7 +692,10 @@ describe("F-015: bounded per-invocation budgets", () => {
     await runSync(env);
 
     expect(mockFetchLikedSongs).toHaveBeenCalledWith(expect.anything(), 3);
-    expect(mockSql.mock.calls[0][1]).toEqual([8]);
+    const queueCall = mockSql.mock.calls.find(
+      (call) => Array.isArray(call[1]) && (call[1] as unknown[]).length === 1 && typeof (call[1] as unknown[])[0] === "number",
+    ) as [string, unknown[]] | undefined;
+    expect(queueCall![1]).toEqual([8]);
     expect(mockMatchByFuzzy).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ limit: 12 }),
@@ -639,7 +710,10 @@ describe("F-015: bounded per-invocation budgets", () => {
     await runSync(env);
 
     expect(mockFetchLikedSongs).toHaveBeenCalledWith(expect.anything(), 1);
-    expect(mockSql.mock.calls[0][1]).toEqual([5]);
+    const queueCall = mockSql.mock.calls.find(
+      (call) => Array.isArray(call[1]) && (call[1] as unknown[]).length === 1 && typeof (call[1] as unknown[])[0] === "number",
+    ) as [string, unknown[]] | undefined;
+    expect(queueCall![1]).toEqual([5]);
     expect(mockMatchByFuzzy).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ limit: 5 }),
@@ -737,5 +811,383 @@ describe("T-009-17: error_details length matches errors count", () => {
     expect(patch.error_details).toHaveLength(3);
     const codes = patch.error_details!.map((e) => e.error_code).sort();
     expect(codes).toEqual(["tidal_429", "tidal_500", "tidal_parse_error"].sort());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-009-21: seedPlaylistConfigs called before the fetch loop (F-009-R16)
+// ---------------------------------------------------------------------------
+describe("T-009-21: seedPlaylistConfigs called before fetch loop", () => {
+  it("calls seedPlaylistConfigs before fetchLikedSongs on every run", async () => {
+    setupSqlSuccess();
+    setupProviders();
+
+    const callOrder: string[] = [];
+    mockSeedPlaylistConfigs.mockImplementation(() => {
+      callOrder.push("seed");
+      return Promise.resolve(undefined);
+    });
+    mockFetchLikedSongs.mockImplementation(() => {
+      callOrder.push("fetchLiked");
+      return Promise.resolve({ pagesProcessed: 1, tracksInserted: 0, tracksSkipped: 0 });
+    });
+
+    await runSync(makeEnv());
+
+    expect(callOrder.indexOf("seed")).toBeGreaterThanOrEqual(0);
+    expect(callOrder.indexOf("fetchLiked")).toBeGreaterThanOrEqual(0);
+    expect(callOrder.indexOf("seed")).toBeLessThan(callOrder.indexOf("fetchLiked"));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-009-22: orchestrator processes __liked__ + extras within MAX_PLAYLISTS_PER_RUN cap
+// ---------------------------------------------------------------------------
+describe("T-009-22: processes __liked__ + extras within cap", () => {
+  it("fetches __liked__ plus up to (cap-1) extras, skipping remainder", async () => {
+    // 5 extras + __liked__ but cap=3 means __liked__ + 2 extras
+    const configs = [
+      {
+        spotify_playlist_id: "__liked__",
+        spotify_name: "Spotify Liked",
+        tidal_playlist_id: "t-liked",
+        created_at: "2026-01-01T00:00:00Z",
+        last_synced_at: null,
+      },
+      {
+        spotify_playlist_id: "extra1",
+        spotify_name: "Workout",
+        tidal_playlist_id: null,
+        created_at: "2026-01-02T00:00:00Z",
+        last_synced_at: null,
+      },
+      {
+        spotify_playlist_id: "extra2",
+        spotify_name: "Chill",
+        tidal_playlist_id: null,
+        created_at: "2026-01-03T00:00:00Z",
+        last_synced_at: null,
+      },
+      {
+        spotify_playlist_id: "extra3",
+        spotify_name: "Roadtrip",
+        tidal_playlist_id: null,
+        created_at: "2026-01-04T00:00:00Z",
+        last_synced_at: null,
+      },
+    ];
+    // mockSql: membership upsert + fetchPendingMatchQueue
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+      .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] });
+    mockSql
+      .mockResolvedValueOnce([])    // __liked__ membership upsert
+      .mockResolvedValueOnce([]);   // fetchPendingMatchQueue
+    setupProviders({ playlistConfigs: configs });
+
+    const env = { ...makeEnv(), MAX_PLAYLISTS_PER_RUN: "3" };
+    await runSync(env);
+
+    // fetchLikedSongs called once for __liked__
+    expect(mockFetchLikedSongs).toHaveBeenCalledTimes(1);
+    // fetchPlaylistTracks called exactly cap-1 = 2 times for extras
+    expect(mockFetchPlaylistTracks).toHaveBeenCalledTimes(2);
+    expect(mockFetchPlaylistTracks).toHaveBeenCalledWith(env, "extra1", expect.any(Number));
+    expect(mockFetchPlaylistTracks).toHaveBeenCalledWith(env, "extra2", expect.any(Number));
+    expect(mockFetchPlaylistTracks).not.toHaveBeenCalledWith(env, "extra3", expect.any(Number));
+  });
+
+  it("calls writePlaylist for __liked__ and each fetched extra", async () => {
+    const configs = [
+      {
+        spotify_playlist_id: "__liked__",
+        spotify_name: "Spotify Liked",
+        tidal_playlist_id: "t-liked",
+        created_at: "2026-01-01T00:00:00Z",
+        last_synced_at: null,
+      },
+      {
+        spotify_playlist_id: "extra1",
+        spotify_name: "Workout",
+        tidal_playlist_id: "t-extra1",
+        created_at: "2026-01-02T00:00:00Z",
+        last_synced_at: null,
+      },
+    ];
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+      .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] });
+    mockSql
+      .mockResolvedValueOnce([])   // __liked__ membership upsert
+      .mockResolvedValueOnce([]);  // fetchPendingMatchQueue
+    setupProviders({ playlistConfigs: configs });
+
+    await runSync(makeEnv());
+
+    expect(mockWritePlaylist).toHaveBeenCalledTimes(2);
+    expect(mockWritePlaylist).toHaveBeenCalledWith(
+      expect.anything(), "__liked__", "t-liked",
+    );
+    expect(mockWritePlaylist).toHaveBeenCalledWith(
+      expect.anything(), "extra1", "t-extra1",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-009-23: orchestrator emits the post-fetch __liked__ membership upsert (R18)
+// ---------------------------------------------------------------------------
+describe("T-009-23: post-fetch __liked__ membership upsert emitted", () => {
+  it("calls mockSql with an INSERT...SELECT...LEFT JOIN for __liked__ membership after fetchLikedSongs", async () => {
+    setupSqlSuccess();
+    setupProviders();
+
+    await runSync(makeEnv());
+
+    // The R18 upsert is the first direct mockSql call in runSyncBody.
+    // Its SQL contains the __liked__ literal and the LEFT JOIN pattern.
+    const membershipUpsertCall = mockSql.mock.calls.find(
+      (call) =>
+        typeof call[0] === "string" &&
+        (call[0] as string).includes("__liked__") &&
+        (call[0] as string).toLowerCase().includes("left join"),
+    );
+    expect(membershipUpsertCall).toBeDefined();
+    const sql = membershipUpsertCall![0] as string;
+    expect(sql).toMatch(/INSERT INTO playlist_membership/i);
+    expect(sql).toMatch(/'__liked__'/);
+    expect(sql).toMatch(/ON CONFLICT DO NOTHING/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-009-24b: per-playlist FETCH failure does NOT abort the run (R17)
+// ---------------------------------------------------------------------------
+describe("T-009-24b: per-playlist fetch failure does not abort run", () => {
+  it("logs fetch error for extra and continues to matching + write", async () => {
+    const configs = [
+      {
+        spotify_playlist_id: "__liked__",
+        spotify_name: "Spotify Liked",
+        tidal_playlist_id: "t-liked",
+        created_at: "2026-01-01T00:00:00Z",
+        last_synced_at: null,
+      },
+      {
+        spotify_playlist_id: "extra1",
+        spotify_name: "Workout",
+        tidal_playlist_id: "t-extra1",
+        created_at: "2026-01-02T00:00:00Z",
+        last_synced_at: null,
+      },
+    ];
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+      .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] });
+    mockSql
+      .mockResolvedValueOnce([])   // __liked__ membership upsert
+      .mockResolvedValueOnce([]);  // fetchPendingMatchQueue
+    setupProviders({ playlistConfigs: configs });
+
+    mockFetchPlaylistTracks.mockRejectedValueOnce(new Error("Spotify API error: 503"));
+
+    const logSpy = vi.spyOn(console, "log");
+    const result = await runSync(makeEnv());
+
+    // Run still completes and succeeds
+    expect(result.outcome).toBe("succeeded");
+    // Error logged for the failing extra
+    const fetchFailedLog = logSpy.mock.calls.find((call) => {
+      try {
+        const p = JSON.parse(call[0] as string);
+        return p.event === "playlist_fetch_failed" && p.spotify_playlist_id === "extra1";
+      } catch { return false; }
+    });
+    expect(fetchFailedLog).toBeDefined();
+    // __liked__ write still proceeds
+    expect(mockWritePlaylist).toHaveBeenCalledWith(
+      expect.anything(), "__liked__", "t-liked",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-009-24: per-playlist write failure does NOT abort the run (R19)
+// ---------------------------------------------------------------------------
+describe("T-009-24: per-playlist write failure does not abort run", () => {
+  it("continues to subsequent playlists and succeeds when one writePlaylist throws", async () => {
+    const configs = [
+      {
+        spotify_playlist_id: "__liked__",
+        spotify_name: "Spotify Liked",
+        tidal_playlist_id: "t-liked",
+        created_at: "2026-01-01T00:00:00Z",
+        last_synced_at: null,
+      },
+      {
+        spotify_playlist_id: "extra1",
+        spotify_name: "Workout",
+        tidal_playlist_id: "t-extra1",
+        created_at: "2026-01-02T00:00:00Z",
+        last_synced_at: null,
+      },
+    ];
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+      .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] });
+    mockSql
+      .mockResolvedValueOnce([])   // __liked__ membership upsert
+      .mockResolvedValueOnce([]);  // fetchPendingMatchQueue
+    setupProviders({ playlistConfigs: configs });
+
+    // First writePlaylist (__liked__) throws; second (extra1) should still be called.
+    mockWritePlaylist
+      .mockRejectedValueOnce(new Error("Tidal 500 on __liked__"))
+      .mockResolvedValueOnce({
+        playlistId: "t-extra1",
+        added: 1,
+        skippedDuplicates: 0,
+        invalidIds: [],
+        errors: 0,
+      });
+
+    const result = await runSync(makeEnv());
+
+    // Run still completes; second writePlaylist was called
+    expect(mockWritePlaylist).toHaveBeenCalledTimes(2);
+    // Run outcome is still succeeded (write failures don't affect sync_runs status per R19)
+    expect(result.outcome).toBe("succeeded");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-009-25: 0 extras (env var empty) preserves pre-multi-playlist behaviour
+// ---------------------------------------------------------------------------
+describe("T-009-25: 0 extras — pre-multi-playlist behaviour preserved", () => {
+  it("only calls fetchLikedSongs when configs has just __liked__", async () => {
+    setupSqlSuccess();
+    setupProviders(); // DEFAULT_CONFIGS = [__liked__] only
+
+    await runSync(makeEnv());
+
+    expect(mockFetchLikedSongs).toHaveBeenCalledTimes(1);
+    expect(mockFetchPlaylistTracks).not.toHaveBeenCalled();
+    expect(mockWritePlaylist).toHaveBeenCalledTimes(1);
+    expect(mockWritePlaylist).toHaveBeenCalledWith(
+      expect.anything(), "__liked__", "tidal-liked-001",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-009-26: legacy single-arg writePlaylist replaced with per-playlist loop
+// ---------------------------------------------------------------------------
+describe("T-009-26: writePlaylist called per-playlist, not single-arg legacy", () => {
+  it("writePlaylist receives spotifyPlaylistId and tidalPlaylistId, not just env", async () => {
+    setupSqlSuccess();
+    setupProviders();
+
+    await runSync(makeEnv());
+
+    // writePlaylist must be called with (env, spotifyId, tidalId) — 3 args, not 1
+    const calls = mockWritePlaylist.mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toHaveLength(3);
+    expect(calls[0][1]).toBe("__liked__");
+    expect(calls[0][2]).toBe("tidal-liked-001");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-009-20: MAX_PLAYLISTS_PER_RUN env var respected (default 3)
+// ---------------------------------------------------------------------------
+describe("MAX_PLAYLISTS_PER_RUN: default 3 and env override", () => {
+  it("defaults to 3 when env var absent (fetches __liked__ + up to 2 extras)", async () => {
+    const configs = [
+      {
+        spotify_playlist_id: "__liked__",
+        spotify_name: "Spotify Liked",
+        tidal_playlist_id: "t-liked",
+        created_at: "2026-01-01T00:00:00Z",
+        last_synced_at: null,
+      },
+      {
+        spotify_playlist_id: "e1",
+        spotify_name: "P1",
+        tidal_playlist_id: null,
+        created_at: "2026-01-02T00:00:00Z",
+        last_synced_at: null,
+      },
+      {
+        spotify_playlist_id: "e2",
+        spotify_name: "P2",
+        tidal_playlist_id: null,
+        created_at: "2026-01-03T00:00:00Z",
+        last_synced_at: null,
+      },
+      {
+        spotify_playlist_id: "e3",
+        spotify_name: "P3",
+        tidal_playlist_id: null,
+        created_at: "2026-01-04T00:00:00Z",
+        last_synced_at: null,
+      },
+    ];
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+      .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] });
+    mockSql
+      .mockResolvedValueOnce([])   // __liked__ membership upsert
+      .mockResolvedValueOnce([]);  // fetchPendingMatchQueue
+    setupProviders({ playlistConfigs: configs });
+
+    // No MAX_PLAYLISTS_PER_RUN set — defaults to 3
+    await runSync(makeEnv());
+
+    // __liked__ + 2 extras = 3 total; 4th extra (e3) deferred
+    expect(mockFetchPlaylistTracks).toHaveBeenCalledTimes(2);
+    expect(mockFetchPlaylistTracks).not.toHaveBeenCalledWith(
+      expect.anything(), "e3", expect.any(Number),
+    );
+  });
+
+  it("respects env override of 1 (only __liked__, no extras)", async () => {
+    const configs = [
+      {
+        spotify_playlist_id: "__liked__",
+        spotify_name: "Spotify Liked",
+        tidal_playlist_id: "t-liked",
+        created_at: "2026-01-01T00:00:00Z",
+        last_synced_at: null,
+      },
+      {
+        spotify_playlist_id: "e1",
+        spotify_name: "P1",
+        tidal_playlist_id: null,
+        created_at: "2026-01-02T00:00:00Z",
+        last_synced_at: null,
+      },
+    ];
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+      .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] });
+    mockSql
+      .mockResolvedValueOnce([])   // __liked__ membership upsert
+      .mockResolvedValueOnce([]);  // fetchPendingMatchQueue
+    setupProviders({ playlistConfigs: configs });
+
+    await runSync({ ...makeEnv(), MAX_PLAYLISTS_PER_RUN: "1" });
+
+    expect(mockFetchLikedSongs).toHaveBeenCalledTimes(1);
+    expect(mockFetchPlaylistTracks).not.toHaveBeenCalled();
+  });
+
+  it("falls back to 3 when env value is invalid", async () => {
+    setupSqlSuccess();
+    setupProviders();
+
+    const env = { ...makeEnv(), MAX_PLAYLISTS_PER_RUN: "not-a-number" };
+    const result = await runSync(env);
+    expect(result.outcome).toBe("succeeded");
   });
 });
