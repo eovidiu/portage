@@ -57,3 +57,22 @@ export function buildCursorQuery(
     [key, value],
   );
 }
+
+// F-017-R5: per-playlist cursor key derivation.
+// __liked__ uses the legacy flat keys (spotify_cursor / spotify_resume_url /
+// spotify_sweep_max) so F-005's tested code path stays untouched. Extras
+// use the prefixed form playlist:{id}:{kind}.
+export type PlaylistStateKind = "cursor" | "resume_url" | "sweep_max";
+const LIKED_LEGACY_KEYS: Record<PlaylistStateKind, string> = {
+  cursor: "spotify_cursor",
+  resume_url: "spotify_resume_url",
+  sweep_max: "spotify_sweep_max",
+};
+
+export function keyForPlaylist(
+  kind: PlaylistStateKind,
+  spotifyPlaylistId: string,
+): string {
+  if (spotifyPlaylistId === "__liked__") return LIKED_LEGACY_KEYS[kind];
+  return `playlist:${spotifyPlaylistId}:${kind}`;
+}

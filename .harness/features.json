@@ -2,7 +2,7 @@
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
   "total_features": 22,
-  "passing": 19,
+  "passing": 20,
   "features": [
     {
       "id": "F014",
@@ -629,7 +629,7 @@
       "test_spec": "docs/specs/T-017-multi-playlist-fetch.md",
       "description": "Multi-playlist Spotify fetch: fetchPlaylistTracks for /v1/playlists/{id}/tracks (mirrors F-005 mid-sweep design), playlist_membership join table, per-playlist cursor keys in sync_state, membership write piggybacks on Liked Songs fetch transaction (Q1=unify)",
       "priority": 11,
-      "status": "pending",
+      "status": "passing",
       "scope": [
         "src/providers/spotify/playlists.ts",
         "src/db/playlist_membership.ts",
@@ -637,6 +637,7 @@
         "db/schema.sql",
         "tests/providers/spotify/playlists.test.ts",
         "tests/db/playlist_membership.test.ts",
+        "tests/db/sync_state.test.ts",
         "docs/specs/F-017-multi-playlist-fetch.md",
         "docs/specs/T-017-multi-playlist-fetch.md"
       ],
@@ -645,12 +646,18 @@
         "F005"
       ],
       "assigned_to": null,
-      "test_file": null,
-      "coverage": null,
-      "notes": "Phase B Agent Team teammate scope. Mirrors F-005's mid-sweep continuation pattern (cursor + resume_url + sweep_max keyed by playlist id). Critical I-005 invariant: tracks upsert + membership upsert + cursor advance MUST be atomic on the last fetched page. Test must use the captureStateWrites pattern from F-015 (filter writes by key, not by call order). Liked Songs membership write happens in orchestrator post-fetch step (do not modify src/providers/spotify/liked.ts core). Live Neon migration (CREATE TABLE playlist_membership + 2 indices + Q4 backfill INSERT) deferred until Ovidiu present.",
+      "test_file": "tests/providers/spotify/playlists.test.ts + tests/db/playlist_membership.test.ts + tests/db/sync_state.test.ts",
+      "coverage": "src/db/playlist_membership.ts: 100/100/100/100; src/db/sync_state.ts: 100/100/100/100; src/providers/spotify/playlists.ts: 96.19/81.57/100/95.91 (istanbul). Statements gate met. Uncovered branches: 5xx-on-first-try and 5xx-on-retry paths in fetchPlaylistPage (mirrors F-005 liked.ts coverage pattern). 20 new unit tests across 3 files.",
+      "notes": "Phase B single-session shipped 2026-05-09 (same pattern as F-016: Phase B specced for Agent Team but executed single-session due to live-migration CHECKPOINT needing operator-present coordination). fetchPlaylistTracks mirrors F-005 mid-sweep design with per-playlist cursor keys via keyForPlaylist helper (legacy flat keys reserved for __liked__ for F-005 backward compat). Live Neon migration applied to production branch — playlist_membership table + 2 indices + Q4 backfill INSERT (which seeded N rows for currently-matched __liked__ tracks). __liked__ membership writes for new Liked Songs tracks happen in orchestrator post-fetch step (F-016b's responsibility), not in liked.ts. fetchLikedSongs UNMODIFIED.",
       "correction_cycles": 0,
       "scope_expansions": [],
-      "approaches_tried": [],
+      "approaches_tried": [
+        "Spec-first: F-017 + T-017 specs land before code; spec amendment style mirrors F-005's R12-R16 mid-sweep amendment.",
+        "Helper duplication over shared module: fetchPlaylistPage / shouldSkip / toTrackRow duplicated rather than imported from liked.ts, to keep liked.ts genuinely unmodified per the spec's UNMODIFIED guarantee.",
+        "Extended I-005 atomicity: the page-final transaction now contains tracks upserts + membership upserts + 3 sync_state writes. Test asserts the array shape directly via mockTxSql.mock.calls.",
+        "keyForPlaylist helper with __liked__ special-case (returns legacy flat keys) — preserves F-005 cursor keys verbatim; extras get the prefixed playlist:{id}:{kind} form.",
+        "ON CONFLICT DO NOTHING for membership upserts ensures added_at is preserved on duplicate (idempotent re-fetch)."
+      ],
       "failure_reason": null,
       "discovered_via": "exploration:multi-playlist-sync.md"
     },
