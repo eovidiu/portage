@@ -22,4 +22,8 @@ export interface Env {
   SPOTIFY_EXTRA_PLAYLIST_IDS?: string;
   /** Maximum playlists processed per orchestrator invocation. Defaults to 3. (F-016) */
   MAX_PLAYLISTS_PER_RUN?: string;
+  /** Cloudflare Access team name (e.g. "eovidiu" → eovidiu.cloudflareaccess.com). (F-019) */
+  CF_ACCESS_TEAM?: string;
+  /** Cloudflare Access Application Audience tag — `aud` claim on the Access JWT. (F-019) */
+  CF_ACCESS_AUD?: string;
 }
