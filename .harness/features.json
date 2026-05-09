@@ -2,7 +2,7 @@
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
   "total_features": 26,
-  "passing": 22,
+  "passing": 23,
   "features": [
     {
       "id": "F014",
@@ -733,21 +733,29 @@
       "test_spec": null,
       "description": "Cloudflare Access JWT verification middleware + CORS for SPA origins",
       "priority": 14,
-      "status": "pending",
+      "status": "passing",
       "scope": [
         "src/middleware/cf_access.ts",
+        "src/middleware/auth.ts",
         "src/index.ts",
         "tests/middleware/cf_access.test.ts",
         "src/env.ts"
       ],
       "depends_on": [],
       "assigned_to": null,
-      "test_file": null,
-      "coverage": null,
-      "notes": "Phase 0 of portage-ui-foundation OpenSpec change. Verifies Cf-Access-Jwt-Assertion against the team JWKS via jose createRemoteJWKSet (module-level cache TTL >= 10 min). Allows email == eovidiu@gmail.com only. Coexists with existing Bearer JWT path: if Cf-Access header present, verify it; else fall back to Bearer; else 401. Worker secrets CF_ACCESS_TEAM and CF_ACCESS_AUD required (Ovidiu sets up Zero Trust + Google IdP per design.md walkthrough — service-token bypass policy preserves Bearer for cron + iOS). CORS middleware allows https://app.portage.eovidiu.co.uk and http://localhost:5173. No-auth requests (other than /healthz, /auth/*/callback) return 401.",
+      "test_file": "tests/middleware/cf_access.test.ts",
+      "coverage": "src/middleware/cf_access.ts: 100% statements, 100% branches, 100% functions, 100% lines (istanbul). src/middleware/auth.ts: 95.23% stmts / 83.33% branches / 100% funcs / 95.23% lines (post-F-019; the slight dip vs 97.5% pre-F-019 is the new principal short-circuit branch). src/index.ts: 94.73 / 75 / 50 / 100 — pre-existing untested root handler `app.get('/', ...)`, NOT introduced by F-019. Gate met on touched code (cf_access.ts at 100%; auth.ts uncovered branches are defensive AuthError-vs-Error discrimination).",
+      "notes": "Phase 0 of portage-ui-foundation OpenSpec change. Verifies Cf-Access-Jwt-Assertion against the team JWKS via jose createRemoteJWKSet (module-level cache TTL 10 min). Allows email == eovidiu@gmail.com only. Coexists with existing Bearer JWT path: cfAccessMiddleware runs first, sets c.var.principal on success and short-circuits jwtMiddleware via principal check; jwtMiddleware also now sets principal:{kind:'service'} on Bearer success. Worker secrets CF_ACCESS_TEAM and CF_ACCESS_AUD required (operator sets up Zero Trust + Google IdP per OpenSpec design.md walkthrough — service-token bypass policy preserves Bearer for cron + iOS). CORS middleware allows https://app.portage.eovidiu.co.uk and http://localhost:5173. 20 new T-019 unit tests; 609/609 unit tests passing.",
       "correction_cycles": 0,
-      "scope_expansions": [],
-      "approaches_tried": [],
+      "scope_expansions": [
+        "src/middleware/auth.ts (added principal short-circuit + set principal:service on Bearer success)"
+      ],
+      "approaches_tried": [
+        "vi.mock pattern from S11 F-016: vi.mock('jose', async () => ({ ...await vi.importActual(), createRemoteJWKSet: vi.fn() })) + vi.mocked() for type-safe access; generateKeyPair('RS256') in beforeAll for signing test tokens",
+        "ONE combined cfAccessMiddleware that handles only the CF Access path; jwtMiddleware still owns Bearer; coordination via c.set('principal', ...) sentinel — cfAccess sets it, jwtMiddleware checks it and short-circuits",
+        "JWKS module-level cache keyed by team name; resetCfAccessCache() exported for tests; cacheMaxAge: 600_000ms (10 min) on createRemoteJWKSet",
+        "Refactored isLikelyJwksError into inline JWKS_ERROR_PATTERN regex test against `err instanceof Error ? err.message : String(err)` to make the non-Error throw branch reachable by tests (T-019-09b)"
+      ],
       "failure_reason": null,
       "discovered_via": "exploration:portage-ui-foundation"
     },
