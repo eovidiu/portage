@@ -195,3 +195,122 @@ fallback is removed.
 - T-009-05g: non-Error throw (e.g. string) → `fetch_failed`
 
 Per-track codes (R14) inside `error_details[]` are unchanged by this amendment.
+
+## Amendment 2026-05-09 (F-016b): multi-playlist orchestrator wiring (R16-R20)
+
+Multi-playlist sync (F-016/F-017/F-018) is now wired into the orchestrator.
+The fetch/write loop runs once per playlist registered in `playlist_configs`
+(capped per-invocation), with the global match queue shared across all
+playlists. Subrequest budget at `MAX_PLAYLISTS_PER_RUN=3` (4 playlists total
+including Liked Songs) lands at ~18 subrequests per tick under steady state,
+well within the Workers Free 50-cap.
+
+### R16 — Seed playlist_configs at the top of every run
+
+The orchestrator MUST call `seedPlaylistConfigs(env)` (from
+`src/sync/playlist-config-seeder.ts`, F-016) BEFORE the fetch loop on every
+invocation. This ensures the synthetic `__liked__` row is present and any
+new IDs in `SPOTIFY_EXTRA_PLAYLIST_IDS` are upserted with their fetched
+Spotify name. The seeder is idempotent (F-016-R11) so calling it on every
+run is safe.
+
+### R17 — Per-playlist fetch loop
+
+The orchestrator MUST iterate `listPlaylistConfigs(sql)` and fetch tracks
+for each row, capped at `MAX_PLAYLISTS_PER_RUN` (default 3, env-configurable,
+defaults applied via the F-015 `readBudget` pattern).
+
+The cap MUST always include `__liked__` — Liked Songs is processed every
+run, and the cap applies to extras only. Effectively: process Liked Songs
+plus up to `(MAX_PLAYLISTS_PER_RUN - 1)` extras per run. (Practical cap of
+3 means one __liked__ + up to 2 extras under steady state.) Extras beyond
+the cap are deferred to subsequent invocations; ordering is by
+`last_synced_at NULLS FIRST, created_at` so newly-added extras get a turn
+quickly.
+
+For `__liked__`:
+- Call `fetchLikedSongs(env, LIKED_PAGES_PER_RUN)` (F-005, unmodified).
+- Then run the post-fetch __liked__ membership upsert (R18).
+
+For extras:
+- Call `fetchPlaylistTracks(env, spotifyPlaylistId, LIKED_PAGES_PER_RUN)`
+  (F-017). Membership writes happen inside the fetch transaction.
+
+Per-playlist fetch failures MUST be classified by F-009 R15 and logged
+without aborting subsequent playlists' fetches in the same run. (One bad
+playlist must not block others.)
+
+### R18 — Post-fetch __liked__ membership upsert
+
+After `fetchLikedSongs` returns, the orchestrator MUST upsert
+`playlist_membership` rows for the synthetic `__liked__` playlist for any
+tracks not already present:
+
+```sql
+INSERT INTO playlist_membership (spotify_playlist_id, spotify_track_id, added_at, synced_at)
+SELECT '__liked__', t.spotify_id, t.spotify_added_at, NULL
+FROM tracks t
+LEFT JOIN playlist_membership pm
+  ON pm.spotify_playlist_id = '__liked__' AND pm.spotify_track_id = t.spotify_id
+WHERE pm.spotify_track_id IS NULL
+ON CONFLICT DO NOTHING;
+```
+
+This is the orchestrator's responsibility (NOT `liked.ts`'s) per F-017's
+"`fetchLikedSongs` UNMODIFIED" guarantee. The query is idempotent: rows
+already present are skipped via the LEFT JOIN; the ON CONFLICT DO NOTHING
+is a defensive belt-and-suspenders. Cost: one DB round-trip per run.
+
+### R19 — Per-playlist write loop
+
+After the global ISRC + fuzzy match queue runs (existing R10/R12 paths,
+unchanged), the orchestrator MUST iterate the same `playlist_configs` set
+processed in R17 and call F-018's `writePlaylist(env, spotifyPlaylistId, tidalPlaylistId)`
+for each row. The Tidal id is read from `playlist_configs.tidal_playlist_id`;
+if null, F-018 auto-creates the Tidal playlist and persists the new id.
+
+Per-playlist write failures (Tidal 5xx, network) MUST be logged but MUST NOT
+abort the run — the run continues to subsequent playlists. The
+`PlaylistWriteResult` from F-018 surfaces error counts; the orchestrator
+aggregates them into the `sync_runs` row.
+
+### R20 — Configuration: `MAX_PLAYLISTS_PER_RUN`
+
+A new env var `MAX_PLAYLISTS_PER_RUN` controls the per-invocation extras
+cap. Format: integer ≥1 (defaults to 3; invalid input ⇒ default). Same
+fallback semantics as F-015's `LIKED_PAGES_PER_RUN` etc. The seeder + R17
+loop both reference this value.
+
+### R21 — Subrequest budget audit (Workers Free 50-cap)
+
+Steady-state per-invocation subrequest count with N extras:
+- 1 fetchLikedSongs page = 1
+- N fetchPlaylistTracks pages = N
+- Up to MATCH_BATCH_ISRC ISRC lookups = 5 (global)
+- Up to MATCH_BATCH_FUZZY fuzzy searches = 5 (global)
+- Up to (1 + N) Tidal write batches = (1 + N) (one per playlist with
+  unsynced rows; getPlaylist sometimes adds 1 per playlist on first sync)
+
+For N=3 (MAX_PLAYLISTS_PER_RUN=3, plus __liked__): 1 + 3 + 5 + 5 + 4 = 18
+subrequests, leaving 32 for retries/transients. For N=18, total ≈ 47 (right
+at cap, no headroom). Operator MUST keep `MAX_PLAYLISTS_PER_RUN` ≤ 3 unless
+upgrading to Workers Paid.
+
+### R22 — sync_runs row aggregation across playlists
+
+The `sync_runs` row counts (`tracks_seen, matched_isrc, matched_fuzzy,
+unmatched, errors`) MUST aggregate across ALL playlists processed in the
+invocation. Per-playlist totals are logged via the F-018 `playlist_write_completed`
+event but NOT persisted as separate rows. This keeps the sync_runs schema
+flat and compatible with existing F-011 read paths (status/runs/stats
+endpoints).
+
+### R23 — Test gates (T-009 extension)
+
+- T-009-21: orchestrator calls seedPlaylistConfigs before fetch loop
+- T-009-22: orchestrator processes __liked__ + extras within MAX_PLAYLISTS_PER_RUN cap
+- T-009-23: orchestrator emits the post-fetch __liked__ membership upsert query
+- T-009-24: per-playlist write failure does NOT abort the run
+- T-009-25: 0 extras (env var empty) preserves the pre-multi-playlist behaviour
+- T-009-26: legacy single-arg `writePlaylist(env)` call site replaced with
+  per-playlist invocation

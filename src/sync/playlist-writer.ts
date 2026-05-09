@@ -51,22 +51,36 @@ async function ensurePlaylist(
 }
 
 /**
- * Run the full playlist write pass for the current sync.
+ * Run the playlist write pass for a Spotify→Tidal playlist pair.
  *
- * 2026-05-02 simplification: previously read full playlist contents via
- * `getAllPlaylistTrackIds` to dedupe before writing. That paginated read
- * grew with playlist size and Tidal rate-limited the GET on every cron
- * (HTTP 429), throwing inside writePlaylist, which left the watermark
- * frozen and the queue stuck. The watermark itself already prevents
- * double-writes in steady state: each match is selected exactly once
+ * F-018 (Phase B prep): signature generalised to take a Spotify playlist id
+ * and an optional Tidal playlist id. Defaults preserve the legacy single-arg
+ * call site during the prep PR transition window — the body still uses the
+ * pre-multi-playlist flow (sync_state.tidal_playlist_id +
+ * selectMatchesNewerThan + watermark). The F-018 implementation PR replaces
+ * this body to use playlist_configs + selectUnsyncedMatchesForPlaylist +
+ * markMembershipSynced. Both the legacy and new callers can co-exist on this
+ * signature without behaviour change until F-018 lands.
+ *
+ * 2026-05-02 simplification (preserved in this stub body): previously read
+ * full playlist contents via `getAllPlaylistTrackIds` to dedupe before
+ * writing. The watermark itself already prevents double-writes in steady
+ * state: each match is selected exactly once
  * (`matched_at > last_write_at`), and the watermark advances atomically
  * after each successful invocation. Trade-off: a worker crash AFTER the
  * Tidal POST returns and BEFORE the watermark write could re-enqueue
- * already-written matches on the next run. For this single-tenant tool
- * the duplicate window is acceptable; manual cleanup is trivial if it
- * ever surfaces.
+ * already-written matches on the next run.
  */
-export async function writePlaylist(env: Env): Promise<PlaylistWriteResult> {
+export async function writePlaylist(
+  env: Env,
+  // F-018 prep stub: the new params are ignored by this body. F-018's PR
+  // replaces the body to consume them. spotifyPlaylistId='__liked__' is the
+  // synthetic key for Liked Songs (F-016-R2). tidalPlaylistId=null lets the
+  // caller defer Tidal id resolution to F-018 (look up from playlist_configs,
+  // create if absent).
+  _spotifyPlaylistId: string = "__liked__",
+  _tidalPlaylistId: string | null = null,
+): Promise<PlaylistWriteResult> {
   const sql = neon(env.DATABASE_URL) as NeonQueryFunction<false, false>;
 
   const playlistId = await ensurePlaylist(env, sql);
