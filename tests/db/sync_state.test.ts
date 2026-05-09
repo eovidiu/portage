@@ -7,7 +7,7 @@ vi.mock("@neondatabase/serverless", () => ({
   neon: () => mockQuery,
 }));
 
-import { readCursor, buildCursorQuery } from "../../src/db/sync_state";
+import { readCursor, buildCursorQuery, keyForPlaylist } from "../../src/db/sync_state";
 
 const makeEnv = (): Env => ({
   DATABASE_URL: "postgresql://test",
@@ -57,5 +57,27 @@ describe("buildCursorQuery", () => {
     expect(sql.toLowerCase()).toContain("on conflict");
     expect(params[0]).toBe("spotify_cursor");
     expect(params[1]).toBe("2026-04-25T07:00:00Z");
+  });
+});
+
+describe("T-017-03: keyForPlaylist format for extras", () => {
+  it("returns playlist:{id}:cursor for extras", () => {
+    expect(keyForPlaylist("cursor", "abc123")).toBe("playlist:abc123:cursor");
+  });
+
+  it("returns playlist:{id}:resume_url for extras", () => {
+    expect(keyForPlaylist("resume_url", "abc123")).toBe("playlist:abc123:resume_url");
+  });
+
+  it("returns playlist:{id}:sweep_max for extras", () => {
+    expect(keyForPlaylist("sweep_max", "abc123")).toBe("playlist:abc123:sweep_max");
+  });
+});
+
+describe("T-017-04: keyForPlaylist special-cases __liked__", () => {
+  it("returns the legacy flat keys for __liked__ (preserves F-005 backward compat)", () => {
+    expect(keyForPlaylist("cursor", "__liked__")).toBe("spotify_cursor");
+    expect(keyForPlaylist("resume_url", "__liked__")).toBe("spotify_resume_url");
+    expect(keyForPlaylist("sweep_max", "__liked__")).toBe("spotify_sweep_max");
   });
 });
