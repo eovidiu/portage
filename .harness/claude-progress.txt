@@ -195,3 +195,23 @@ Suggested Sprint 7 team structure:
 - Phase D production deploy with the F-015 playbook (manual smoke, wrangler tail watch, cron re-enable).
 - Sprint 7 minor follow-ups still open and orthogonal: F-012 M1 (candidates fetch), F-012 M2/M3 (R10/R11 fuzzy filter), F-013 M4 (R9 orphan ISRC UNION), M7 (HTTP route logging swallows). None block multi-playlist; interleave anytime.
 - Carry-over (long-running): F-Integ extension deferred since Sprint 5 (lock semantics integration coverage).
+
+## Session 12 - Multi-playlist sync FULLY SHIPPED + production deploy (2026-05-09)
+- Mode: Agent Teams orchestration sweep per Ovidiu's "orchestrate all in parallel; stop when everything is fully working" instruction. 4 PRs landed, 2 live Neon migrations applied, 1 production deploy.
+- PR #12 (commit df5410f): docs(prep) — F-018/T-018 specs + F-009 R16-R23 amendment + writePlaylist stub with backward-compat defaults. Lead-only authoring; no implementation. Live Neon bridge migration applied alongside (UPDATE playlist_configs SET tidal_playlist_id = sync_state.tidal_playlist_id WHERE __liked__). Tidal id `f10ce98a-e3b8-4bc4-96ca-d38ab88ca3c5` now bound to the registry.
+- PR #14 (commit 355c54c): feat(F-016b) — orchestrator multi-playlist wiring (R16-R23). Teammate "orch" (Sonnet, parallel). seedPlaylistConfigs at top, per-playlist fetch loop with MAX_PLAYLISTS_PER_RUN cap, post-fetch __liked__ membership upsert (INSERT...SELECT...LEFT JOIN ON CONFLICT DO NOTHING), per-playlist write loop calling writePlaylist with new args, error isolation per playlist. F-009 M5 classifier preserved unchanged. Coverage 100/91/100/100 on orchestrator.ts.
+- PR #13 (commit 86d8399): feat(F-018) — multi-playlist Tidal write — generalize writePlaylist. Teammate "writer" (Sonnet, parallel). writePlaylist body replaced: resolvePlaylistId (caller-supplied / config / auto-create / recreate), selectUnsyncedMatchesForPlaylist read path, markMembershipSynced write path, no legacy watermark reads. Coverage 100/100/100/100 on playlist-writer.ts.
+- Phase 2 spawn: two Task() calls in a single message, both subagent_type=general-purpose model=sonnet. Truly parallel: F-018 + F-016b ran concurrently, returning end-to-end PR-ready commits. Lead reviewed diffs, merged in dependency-safe order (F-016b first, F-018 second).
+- Phase D deploy: `npm install` (resolved missing @neondatabase/serverless module reference after teammate work), `npx wrangler deploy`. Version 1d157357-9ad8-4273-821e-660436e638a8 live. /healthz green, /readyz green (database, all 7 secrets, both provider tokens active). Cron triggers retained at 2x daily.
+- Tests: 589/589 unit passing on main (was 558 pre-Phase-B+C). All 5 hook stages green throughout. tsc clean.
+- features.json: F-016, F-017, F-018, F-016b all status=passing. 22/22 features now passing (was 18 at session 10 start).
+- Stage 4 schema-drift hook quirk: regex matches uppercase-INSERT/UPDATE inside JS code containing variable names like `totalTracksInserted`. Workaround applied (variable renamed). Real fix is a harness debt ticket — hook should distinguish SQL strings from JS identifiers.
+
+## Next Session — Multi-playlist activation + Sprint 7 minor follow-ups
+- **Operator action to start syncing extras**: set `SPOTIFY_EXTRA_PLAYLIST_IDS=<csv>` in `wrangler.toml` `[vars]` (e.g., `SPOTIFY_EXTRA_PLAYLIST_IDS = "37i9dQZF1DXcBWIGoYBM5M"` for Today's Top Hits). Optionally `MAX_PLAYLISTS_PER_RUN = "3"` to override default. Run `npx wrangler deploy`. The next cron tick (or a manual `POST /sync/run`) will fetch each playlist, auto-create the Tidal counterpart on first sync, and propagate tracks via the global match queue. Verify with `wrangler tail` that subrequest count stays under 50.
+- **Sprint 7 minor follow-ups still open** (none block multi-playlist; interleave anytime):
+  - F-012 M1: R3/R4 candidates fetch returns [] — needs real candidate fetch via F-007 search reuse with 10s timeout
+  - F-012 M2/M3: R10/R11 fuzzy filter — skipped + within-7-day-pending exclusion (predicate shared with fetchPendingMatchQueue, partially landed in F-015)
+  - F-013 M4: R9 orphan ISRC UNION — orphans bypass ISRC stage; fix is UNION in fetchNewTracks
+  - M7: HTTP route logging swallows — orchestrator route ergonomics
+- **Harness debt**: schema-drift hook regex quirk (Stage 4) — needs SQL string vs JS identifier disambiguation. Document fix in a future PR or ticket.
