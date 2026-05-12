@@ -70,7 +70,7 @@ describe("T-010-07: 200 response when run completes within 25 s", () => {
     });
 
     const app = makeApp();
-    const res = await app.request("/sync/run", { method: "POST" }, makeEnv());
+    const res = await app.request("/sync/run", { method: "POST", headers: { "Content-Type": "application/json" } }, makeEnv());
 
     expect(res.status).toBe(200);
     const body = await res.json() as Record<string, unknown>;
@@ -92,7 +92,7 @@ describe("T-010-07: 200 response when run completes within 25 s", () => {
     });
 
     const app = makeApp();
-    const res = await app.request("/sync/run", { method: "POST" }, makeEnv());
+    const res = await app.request("/sync/run", { method: "POST", headers: { "Content-Type": "application/json" } }, makeEnv());
 
     expect(res.status).toBe(200);
     const body = await res.json() as Record<string, unknown>;
@@ -108,7 +108,7 @@ describe("T-010-07: 200 response when run completes within 25 s", () => {
     });
 
     const app = makeApp();
-    const res = await app.request("/sync/run", { method: "POST" }, makeEnv());
+    const res = await app.request("/sync/run", { method: "POST", headers: { "Content-Type": "application/json" } }, makeEnv());
 
     expect(res.status).toBe(200);
     const body = await res.json() as Record<string, unknown>;
@@ -140,7 +140,7 @@ describe("T-010-08: 202 Accepted when orchestrator exceeds 25 s", () => {
     vi.useFakeTimers();
 
     const app = makeApp();
-    const resPromise = app.request("/sync/run", { method: "POST" }, makeEnv());
+    const resPromise = app.request("/sync/run", { method: "POST", headers: { "Content-Type": "application/json" } }, makeEnv());
 
     await vi.advanceTimersByTimeAsync(25_001);
     const res = await resPromise;
@@ -160,7 +160,7 @@ describe("T-010-08: 202 Accepted when orchestrator exceeds 25 s", () => {
     vi.useFakeTimers();
 
     const app = makeApp();
-    const resPromise = app.request("/sync/run", { method: "POST" }, makeEnv());
+    const resPromise = app.request("/sync/run", { method: "POST", headers: { "Content-Type": "application/json" } }, makeEnv());
 
     await vi.advanceTimersByTimeAsync(25_001);
     const res = await resPromise;
@@ -192,7 +192,7 @@ describe("T-010-09: 409 Conflict on lock contention", () => {
     });
 
     const app = makeApp();
-    const res = await app.request("/sync/run", { method: "POST" }, makeEnv());
+    const res = await app.request("/sync/run", { method: "POST", headers: { "Content-Type": "application/json" } }, makeEnv());
 
     expect(res.status).toBe(409);
     const body = await res.json() as Record<string, unknown>;
@@ -205,11 +205,42 @@ describe("T-010-09: 409 Conflict on lock contention", () => {
     mockGetLatestRun.mockResolvedValue(null);
 
     const app = makeApp();
-    const res = await app.request("/sync/run", { method: "POST" }, makeEnv());
+    const res = await app.request("/sync/run", { method: "POST", headers: { "Content-Type": "application/json" } }, makeEnv());
 
     expect(res.status).toBe(409);
     const body = await res.json() as Record<string, unknown>;
     expect(body.error).toBe("run_in_progress");
     expect(body.current_run_id).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CSRF defense: Content-Type guard (UI-PHASE-7 M-1)
+// ---------------------------------------------------------------------------
+describe("Content-Type guard (CSRF defense)", () => {
+  it("returns 415 when Content-Type header is missing", async () => {
+    const app = makeApp();
+    const res = await app.request("/sync/run", { method: "POST" }, makeEnv());
+
+    expect(res.status).toBe(415);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe("content_type_required");
+    expect(mockRunSync).not.toHaveBeenCalled();
+  });
+
+  it("returns 415 when Content-Type is application/x-www-form-urlencoded (cross-origin form POST)", async () => {
+    const app = makeApp();
+    const res = await app.request(
+      "/sync/run",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "foo=bar",
+      },
+      makeEnv(),
+    );
+
+    expect(res.status).toBe(415);
+    expect(mockRunSync).not.toHaveBeenCalled();
   });
 });
