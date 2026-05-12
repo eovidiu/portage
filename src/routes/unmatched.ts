@@ -76,6 +76,11 @@ unmatchedRoute.post("/:spotify_id/match", async (c) => {
 });
 
 unmatchedRoute.post("/:spotify_id/skip", async (c) => {
+  const contentType = c.req.header("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    return c.json({ error: "content_type_required" }, 415);
+  }
+
   const spotifyId = c.req.param("spotify_id");
 
   try {

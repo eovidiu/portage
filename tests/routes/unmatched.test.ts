@@ -290,7 +290,7 @@ describe("T-012-11: POST /unmatched/:spotify_id/skip — transitions to skipped"
       status: "skipped" as const,
     });
 
-    const res = await doFetch("/unmatched/X/skip", { method: "POST" });
+    const res = await doFetch("/unmatched/X/skip", { method: "POST", headers: { "Content-Type": "application/json" } });
     expect(res.status).toBe(200);
     const body = await res.json() as { spotify_id: string; status: string };
     expect(body.spotify_id).toBe("X");
@@ -306,7 +306,7 @@ describe("T-012-12: POST /unmatched/:spotify_id/skip — idempotent", () => {
       status: "skipped" as const,
     });
 
-    const res = await doFetch("/unmatched/X/skip", { method: "POST" });
+    const res = await doFetch("/unmatched/X/skip", { method: "POST", headers: { "Content-Type": "application/json" } });
     expect(res.status).toBe(200);
     const body = await res.json() as { status: string };
     expect(body.status).toBe("skipped");
@@ -374,9 +374,32 @@ describe("T-012: POST /unmatched/:spotify_id/skip — DB error returns 503", () 
   it("returns 503 when markSkipped throws", async () => {
     mockMarkSkipped.mockRejectedValueOnce(new Error("db error"));
 
-    const res = await doFetch("/unmatched/X/skip", { method: "POST" });
+    const res = await doFetch("/unmatched/X/skip", { method: "POST", headers: { "Content-Type": "application/json" } });
     expect(res.status).toBe(503);
     const body = await res.json() as { error: string };
     expect(body.error).toBe("service_unavailable");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CSRF defense: Content-Type guard on /skip (UI-PHASE-7 M-1)
+// ---------------------------------------------------------------------------
+describe("POST /unmatched/:spotify_id/skip — Content-Type guard (CSRF defense)", () => {
+  it("returns 415 when Content-Type header is missing", async () => {
+    const res = await doFetch("/unmatched/X/skip", { method: "POST" });
+    expect(res.status).toBe(415);
+    const body = await res.json() as { error: string };
+    expect(body.error).toBe("content_type_required");
+    expect(mockMarkSkipped).not.toHaveBeenCalled();
+  });
+
+  it("returns 415 when Content-Type is application/x-www-form-urlencoded (cross-origin form POST)", async () => {
+    const res = await doFetch("/unmatched/X/skip", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "foo=bar",
+    });
+    expect(res.status).toBe(415);
+    expect(mockMarkSkipped).not.toHaveBeenCalled();
   });
 });

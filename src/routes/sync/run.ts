@@ -8,6 +8,11 @@ const MANUAL_TIMEOUT_MS = 25_000;
 const router = new Hono<{ Bindings: Env }>();
 
 router.post("/run", async (c) => {
+  const contentType = c.req.header("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    return c.json({ error: "content_type_required" }, 415);
+  }
+
   const startedAt = Date.now();
 
   const orchestratorPromise = runSync(c.env);
