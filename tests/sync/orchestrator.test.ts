@@ -1191,3 +1191,143 @@ describe("MAX_PLAYLISTS_PER_RUN: default 3 and env override", () => {
     expect(result.outcome).toBe("succeeded");
   });
 });
+
+// ---------------------------------------------------------------------------
+// T-023: orchestrator_fatal — catch silent-abandon class (F-023)
+// ---------------------------------------------------------------------------
+// Production observability: 7 of 8 failed runs in past 14 days were silent
+// abandons (status=running, no error_code set, all counters zero), cleaned up
+// 12h later by markAbandonedRuns. Root cause: runSync() had no catch — only
+// finally{releaseLock}. Errors from seedPlaylistConfigs, listPlaylistConfigs,
+// the post-fetch membership INSERT, or the final updateRun escaped to
+// scheduled.ts which only logs, leaving the sync_runs row at status=running.
+
+describe("T-023-01: silent-abandon — seedPlaylistConfigs throws", () => {
+  it("updates run with status=failed + error_code=orchestrator_fatal when seedPlaylistConfigs throws", async () => {
+    setupSqlSuccess();
+    setupProviders();
+    mockSeedPlaylistConfigs.mockRejectedValueOnce(
+      new Error("neon connection lost mid-seed"),
+    );
+
+    const result = await runSync(makeEnv());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.error_code).toBe("orchestrator_fatal");
+    expect(result.run_id).toBe("run-001");
+    expect(mockUpdateRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-001",
+      expect.objectContaining({
+        status: "failed",
+        error_code: "orchestrator_fatal",
+      }),
+    );
+  });
+});
+
+describe("T-023-02: silent-abandon — listPlaylistConfigs throws", () => {
+  it("catches listPlaylistConfigs failure and marks run failed (was previously silent)", async () => {
+    // Lock acquires successfully
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+      .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] });
+    mockMarkAbandoned.mockResolvedValue(0);
+    mockInsertRun.mockResolvedValue({ run_id: "run-001" });
+    mockUpdateRun.mockResolvedValue(undefined);
+    mockSeedPlaylistConfigs.mockResolvedValue(undefined);
+    // listPlaylistConfigs (the second uncaught path) throws
+    mockListPlaylistConfigs.mockRejectedValueOnce(
+      new Error("neon socket dropped on SELECT playlist_configs"),
+    );
+
+    const result = await runSync(makeEnv());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.error_code).toBe("orchestrator_fatal");
+    expect(mockUpdateRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-001",
+      expect.objectContaining({
+        status: "failed",
+        error_code: "orchestrator_fatal",
+      }),
+    );
+  });
+});
+
+describe("T-023-03: error_details carry the original message for triage", () => {
+  it("captures the throwing error's message in error_details using the standard {spotify_id, error_code, message} shape (F-009-R12)", async () => {
+    setupSqlSuccess();
+    setupProviders();
+    mockSeedPlaylistConfigs.mockRejectedValueOnce(
+      new Error("specific failure xyz"),
+    );
+
+    await runSync(makeEnv());
+
+    expect(mockUpdateRun).toHaveBeenCalledWith(
+      expect.anything(),
+      "run-001",
+      expect.objectContaining({
+        status: "failed",
+        error_code: "orchestrator_fatal",
+        errors: 1,
+        error_details: expect.arrayContaining([
+          expect.objectContaining({
+            spotify_id: "unknown",
+            error_code: "orchestrator_fatal",
+            message: expect.stringContaining("specific failure xyz"),
+          }),
+        ]),
+      }),
+    );
+  });
+});
+
+describe("T-023-04: defensive — runSync survives updateRun-in-catch failure", () => {
+  it("returns failed and releases the lock even when the recovery updateRun itself throws", async () => {
+    setupSqlSuccess();
+    setupProviders();
+    mockSeedPlaylistConfigs.mockRejectedValueOnce(
+      new Error("primary failure"),
+    );
+    // Recovery updateRun also fails (e.g., Neon still down)
+    mockUpdateRun.mockRejectedValueOnce(
+      new Error("update_run also failed in catch"),
+    );
+
+    const result = await runSync(makeEnv());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.error_code).toBe("orchestrator_fatal");
+    // Lock MUST still release — releaseLock is in finally
+    expect(mockClient.release).toHaveBeenCalled();
+    expect(mockPool.end).toHaveBeenCalled();
+  });
+});
+
+describe("T-023-05: insertRun failure — no row to update, lock still released", () => {
+  it("returns failed when insertRun itself throws; sync_runs unchanged; lock released", async () => {
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+      .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] });
+    mockMarkAbandoned.mockResolvedValue(0);
+    mockInsertRun.mockRejectedValueOnce(
+      new Error("insert_run failed before row could be created"),
+    );
+
+    const result = await runSync(makeEnv());
+
+    expect(result.outcome).toBe("failed");
+    expect(result.error_code).toBe("orchestrator_fatal");
+    // No run_id to report — insertRun never returned one
+    expect(result.run_id).toBeUndefined();
+    // updateRun MUST NOT be called for a row that was never inserted
+    expect(mockUpdateRun).not.toHaveBeenCalled();
+    // Lock still released
+    expect(mockClient.release).toHaveBeenCalled();
+    expect(mockPool.end).toHaveBeenCalled();
+  });
+});
+

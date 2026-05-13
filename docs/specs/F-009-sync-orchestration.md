@@ -71,7 +71,7 @@ The orchestrator runs the full sync sequence: fetch from Spotify (F-005), match 
 | F-009-R11 | The lock MUST be released in a finally block; lock leaks MUST NOT occur on exceptions. |
 | F-009-R12 | Per-track errors caught by F-006 (matchByIsrc) and F-007 (matchByFuzzy) MUST be persisted to `sync_runs.error_details` as a JSONB array of `{spotify_id, error_code, message}` records. The array length MUST equal `sync_runs.errors`. |
 | F-009-R13 | `error_details` MUST be `NULL` for runs with `errors = 0` (succeeded runs and outer-fatal failed runs that never reached matching). |
-| F-009-R14 | The `error_code` values inside `error_details[]` MUST be drawn from the closed set defined by F-006 and F-007: `tidal_429`, `tidal_<status>` (e.g. `tidal_404`, `tidal_500`), `tidal_error`, `tidal_parse_error`, `isrc_fatal`, `fuzzy_fatal`. |
+| F-009-R14 | The `error_code` values inside `error_details[]` MUST be drawn from the closed set defined by F-006, F-007, and F-023: `tidal_429`, `tidal_<status>` (e.g. `tidal_404`, `tidal_500`), `tidal_error`, `tidal_parse_error`, `isrc_fatal`, `fuzzy_fatal`, `orchestrator_fatal`. |
 
 ## State machine
 
@@ -91,6 +91,7 @@ The `sync_runs.status` state machine is defined in `architecture.md` §8.1.
 | `wall_time_exceeded` | Very large catch-up batch | Next run continues from cursor |
 | `spotify_reauth_required` | Spotify token unrecoverable | Operator runs `GET /auth/spotify` |
 | `tidal_reauth_required` | Tidal token unrecoverable | Operator runs `GET /auth/tidal` |
+| `orchestrator_fatal` | Uncaught error in runSync outer body (seedPlaylistConfigs, listPlaylistConfigs, post-fetch membership INSERT, or final updateRun); see F-023 amendment | Operator inspects `error_details[0].message`; next run retries from cursor |
 
 ## Acceptance criteria
 
@@ -314,3 +315,56 @@ endpoints).
 - T-009-25: 0 extras (env var empty) preserves the pre-multi-playlist behaviour
 - T-009-26: legacy single-arg `writePlaylist(env)` call site replaced with
   per-playlist invocation
+
+## Amendment 2026-05-13 (F-023): orchestrator_fatal catch-all
+
+Production query of `sync_runs` on 2026-05-13 revealed that 7 of 8 failed runs
+in the trailing 14 days were "silent abandons" — rows with `status='running'`,
+`error_code=null`, and all counters at zero. They sat as `running` for ~12h
+until `markAbandonedRuns` swept them via the existing F-009-R5 path. Root
+cause: `runSync()` had only a `finally { releaseLock() }` clause and no
+`catch`, so errors from the un-wrapped outer code in `runSyncBody`
+(`seedPlaylistConfigs`, `listPlaylistConfigs`, the post-fetch membership
+`INSERT`, and the final `updateRun`) escaped `runSync` entirely. They
+propagated to `scheduled.ts`'s `.catch` which only logged a
+`scheduled_failed` event — the `sync_runs` row was never updated.
+
+### R24 — Top-level catch in runSync
+
+The orchestrator MUST wrap the `try { ... }` block of `runSync` with a
+`catch (err)` that:
+
+1. If `runId !== undefined` (i.e., `insertRun` succeeded), MUST call
+   `updateRun(env, runId, { status: 'failed', error_code:
+   'orchestrator_fatal', errors: 1, error_details: [{ spotify_id: 'unknown',
+   error_code: 'orchestrator_fatal', message }], finished_at: <timestamp> })`.
+   The `message` is `err instanceof Error ? err.message : String(err)`. The
+   `error_details[]` entry follows the existing R12 shape
+   (`{spotify_id, error_code, message}`) using the project-standard
+   `spotify_id: 'unknown'` placeholder for non-per-track errors (same as
+   `isrc_fatal` / `fuzzy_fatal` in `runSyncBody`); R14's closed set is
+   extended to include `orchestrator_fatal`. `errors: 1` keeps the row
+   consistent with R13 (which requires `error_details = NULL` only when
+   `errors = 0`).
+2. If that `updateRun` itself throws (e.g., Neon still unreachable), MUST
+   log a `sync_run_update_failed_in_catch` event with the primary and
+   secondary error messages, then continue. The next cron's
+   `markAbandonedRuns` is the safety net.
+3. MUST emit a `sync_run_completed` log line with `outcome=failed`,
+   `error_code=orchestrator_fatal`, and the primary message.
+4. MUST return `{ outcome: 'failed', run_id: runId, error_code: 'orchestrator_fatal' }`.
+5. The pre-existing `finally { releaseLock() }` MUST continue to release the
+   advisory lock.
+
+### R25 — Test gates (T-023)
+
+- T-023-01: `seedPlaylistConfigs` throws → row marked
+  `failed/orchestrator_fatal`
+- T-023-02: `listPlaylistConfigs` throws → row marked
+  `failed/orchestrator_fatal`
+- T-023-03: `error_details[0].message` contains the original error message
+- T-023-04: recovery `updateRun` also throws → run still returns
+  `failed/orchestrator_fatal`, lock still released
+- T-023-05: `insertRun` itself throws → `runId` undefined, no
+  `updateRun` call, lock released, `outcome=failed`,
+  `error_code=orchestrator_fatal`

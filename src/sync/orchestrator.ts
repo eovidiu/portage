@@ -397,6 +397,53 @@ export async function runSync(env: Env): Promise<OrchestratorResult> {
     }
 
     return raceResult as OrchestratorResult;
+  } catch (err) {
+    // F-023: catch the silent-abandon class. Without this, errors from the
+    // un-wrapped outer code in runSyncBody (seedPlaylistConfigs,
+    // listPlaylistConfigs, the post-fetch membership INSERT, the final
+    // updateRun) escape runSync entirely and leave the sync_runs row at
+    // status='running' until the next cron's markAbandonedRuns sweeps it
+    // ~12h later. Production query 2026-05-13: 7 of 8 failed runs in 14d
+    // were silent-abandons. Now they get classified as orchestrator_fatal
+    // with the message preserved in error_details.
+    const errorCode = "orchestrator_fatal";
+    const message = err instanceof Error ? err.message : String(err);
+    if (runId !== undefined) {
+      try {
+        await updateRun(env, runId, {
+          status: "failed",
+          error_code: errorCode,
+          errors: 1,
+          error_details: [
+            { spotify_id: "unknown", error_code: "orchestrator_fatal", message },
+          ],
+          finished_at: new Date().toISOString(),
+        });
+      } catch (updateErr) {
+        // Defensive: updateRun itself may have been what threw originally,
+        // or Neon may still be unreachable. Log the second failure and
+        // continue — the next cron's markAbandonedRuns is the safety net.
+        console.log(
+          JSON.stringify({
+            event: "sync_run_update_failed_in_catch",
+            run_id: runId,
+            primary_error: message,
+            secondary_error:
+              updateErr instanceof Error ? updateErr.message : String(updateErr),
+          }),
+        );
+      }
+    }
+    console.log(
+      JSON.stringify({
+        event: "sync_run_completed",
+        run_id: runId,
+        outcome: "failed",
+        error_code: errorCode,
+        message,
+      }),
+    );
+    return { outcome: "failed", run_id: runId, error_code: errorCode };
   } finally {
     await releaseLock(session);
   }
