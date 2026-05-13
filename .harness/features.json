@@ -1,8 +1,8 @@
 {
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
-  "total_features": 26,
-  "passing": 26,
+  "total_features": 27,
+  "passing": 27,
   "features": [
     {
       "id": "F014",
@@ -833,6 +833,33 @@
       ],
       "failure_reason": null,
       "discovered_via": "exploration:portage-ui-foundation"
+    },
+    {
+      "id": "F-023",
+      "spec": "docs/specs/F-009-sync-orchestration.md (R24 + R25 amendment 2026-05-13)",
+      "test_spec": null,
+      "description": "Catch uncaught errors in runSync's outer body to eliminate silent-abandon class (status=running, no error_code, all counters zero, cleaned up 12h later by next cron)",
+      "priority": 6,
+      "status": "passing",
+      "scope": [
+        "src/sync/orchestrator.ts",
+        "tests/sync/orchestrator.test.ts",
+        "docs/specs/F-009-sync-orchestration.md"
+      ],
+      "depends_on": ["F009"],
+      "assigned_to": null,
+      "test_file": "tests/sync/orchestrator.test.ts",
+      "coverage": "src/sync/orchestrator.ts: 100% statements, 88% branches, 100% functions, 100% lines (istanbul). Branch dip vs pre-F-023 (90.9% → 88%) is the new defensive `updateErr instanceof Error ? .message : String(.)` branch in the catch's secondary-failure handler and similar — uncovered branches are non-Error throw paths the tests don't synthesise. Matches F-014 gate-met precedent (94.11% branches accepted).",
+      "notes": "Production observability bug: 7 of 8 failed runs in past 14 days were silent abandons (status=running, no error_code set, all counters zero, cleaned up 12h later by markAbandonedRuns). Root cause: runSync() had `try { ... } finally { releaseLock() }` but no catch — so errors from seedPlaylistConfigs, listPlaylistConfigs, post-fetch membership INSERT, or the final updateRun escaped runSync entirely and reached scheduled.ts's .catch which only logged. Fix: top-level catch in runSync() that updates the row with status='failed', error_code='orchestrator_fatal', errors=1, error_details=[{spotify_id:'unknown',error_code:'orchestrator_fatal',message}] (standard R12 shape, R14 closed set extended). Defensive: nested try/catch around the recovery updateRun in case updateRun itself was what threw originally. F-009-R24 + R25 added to spec; R14 closed set extended. 5 new T-023 unit tests (T-023-01..05). 628 → 633 unit tests passing.",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [
+        "TDD red-green: 5 failing T-023 tests written first (T-023-01 seedPlaylistConfigs throws, T-023-02 listPlaylistConfigs throws, T-023-03 error_details message persistence, T-023-04 defensive recovery-updateRun failure, T-023-05 insertRun throws no row created). All 5 RED with the existing un-caught code; all 5 GREEN after adding the top-level catch.",
+        "Initial implementation used error_details: [{stage, message}] shape — corrected to project-standard {spotify_id:'unknown', error_code, message} from F-006/F-007 isrc_fatal/fuzzy_fatal precedent. R14 closed set extended (one-line spec amendment).",
+        "errors=1 set in the recovery updateRun to keep error_details non-null consistent with R13 (which requires error_details=NULL only when errors=0)."
+      ],
+      "failure_reason": null,
+      "discovered_via": "production-observability"
     }
   ]
 }
