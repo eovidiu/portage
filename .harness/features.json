@@ -1,7 +1,7 @@
 {
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
-  "total_features": 27,
+  "total_features": 28,
   "passing": 27,
   "features": [
     {
@@ -907,6 +907,32 @@
       ],
       "failure_reason": null,
       "discovered_via": "F-012 Sprint-7 M1 broken auto-candidates (GET /unmatched returning candidates: [] forces the user to leave the app to find a Tidal track id)"
+    },
+    {
+      "id": "F-025",
+      "spec": "openspec/changes/f-025-rematch-heuristic/specs/rematch-heuristic/spec.md",
+      "test_spec": null,
+      "description": "Rematch heuristic — sweep + per-row Tidal catalog search using \"first two artist words + first title word\" to surface candidates for unmatched rows that F-007 fuzzy and F-024 full-title manual search both missed.",
+      "priority": 7,
+      "status": "in-progress",
+      "scope": [
+        "src/match/rematch.ts",
+        "src/routes/unmatched.ts",
+        "src/db/unmatched.ts",
+        "tests/match/rematch.test.ts",
+        "tests/routes/unmatched.rematch.test.ts",
+        "openspec/changes/f-025-rematch-heuristic/"
+      ],
+      "depends_on": ["F-024"],
+      "assigned_to": null,
+      "test_file": "tests/match/rematch.test.ts",
+      "coverage": null,
+      "notes": "Pure helper buildRematchQuery() + sweep + single-row variant. Sweep cap 25 keeps the route well under the Workers 50-subrequest budget; single-row variant takes a token from F-024's existing rate-limit bucket (no new bucket). Read-only — selection still flows through POST /:spotify_id/match. Sister UI change tracked in portage-ui repo.",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [],
+      "failure_reason": null,
+      "discovered_via": "operator handheld trick after F-024 shipped: short rematch query consistently retrieves rows that full-title search misses (long featured-artist suffixes, parenthetical version markers)"
     }
   ]
 }
