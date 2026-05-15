@@ -1,12 +1,26 @@
 // F-012: Unmatched review queue — GET /unmatched + POST /unmatched/:spotify_id/match + skip
 // F-024: GET /unmatched/:spotify_id/search — manual Tidal catalog search proxy
+// F-025: GET /unmatched/rematch + GET /unmatched/:spotify_id/rematch — short-query heuristic sweep
 import { Hono } from "hono";
 import type { Env } from "../env";
-import { listPending, markMatched, markSkipped, getUnmatchedCountByEnv } from "../db/unmatched";
+import {
+  listPending,
+  markMatched,
+  markSkipped,
+  getUnmatchedCountByEnv,
+  getPendingUnmatched,
+} from "../db/unmatched";
 import { trackExists } from "../db/tracks";
 import { tidalFetch } from "../providers/tidal/client";
 import { TidalReauthRequired } from "../providers/tidal/oauth";
 import { searchTidalCandidates } from "../match/tidal-search";
+import {
+  buildRematchQuery,
+  runRematchSweep,
+  searchOneRematch,
+  summariseSweep,
+  emitRowLog,
+} from "../match/rematch";
 import { validateSearchQuery, validateSearchLimit } from "./search-validation";
 import { mapCandidateToResponseShape } from "./search-mapper";
 import { takeToken } from "../middleware/rate-limit";
@@ -14,6 +28,14 @@ import { takeToken } from "../middleware/rate-limit";
 const LIMIT_DEFAULT = 20;
 const LIMIT_MAX = 100;
 const SEARCH_TIMEOUT_MS = 3_000;
+
+// F-025: rematch sweep limits. Default 10 keeps p95 under a few seconds at
+// ~300ms/row; cap of 25 leaves headroom under the Workers 50-subrequest
+// budget even when tidalFetch follows its 401-refresh fallback path.
+const REMATCH_LIMIT_DEFAULT = 10;
+const REMATCH_LIMIT_MAX = 25;
+const REMATCH_PER_ROW_TIMEOUT_MS = 3_000;
+const REMATCH_CANDIDATES_PER_ROW = 5;
 
 // Used as `${TIDAL_TRACKS_BASE}/${tidal_id}` to confirm a manually-supplied
 // tidal_id resolves before the I-001 atomic move (markMatched). Only the HTTP
@@ -45,6 +67,71 @@ unmatchedRoute.get("/", async (c) => {
   } catch {
     return c.json({ error: "service_unavailable" }, 503);
   }
+});
+
+// F-025: rematch sweep — static path MUST be registered before the
+// parametric `/:spotify_id/match` so Hono matches `/rematch` against this
+// handler instead of treating "rematch" as a spotify_id.
+unmatchedRoute.get("/rematch", async (c) => {
+  const startedAtMs = Date.now();
+
+  const rawLimit = c.req.query("limit");
+  let limit = REMATCH_LIMIT_DEFAULT;
+  if (rawLimit !== undefined && rawLimit !== "") {
+    if (!/^-?\d+$/.test(rawLimit)) {
+      return c.json(
+        { error: "invalid_limit", message: "limit must be an integer" },
+        400,
+      );
+    }
+    const n = parseInt(rawLimit, 10);
+    if (n < 1 || n > REMATCH_LIMIT_MAX) {
+      return c.json(
+        {
+          error: "invalid_limit",
+          message: `limit must be between 1 and ${REMATCH_LIMIT_MAX}`,
+        },
+        400,
+      );
+    }
+    limit = n;
+  }
+
+  let totalPending: number;
+  try {
+    totalPending = await getUnmatchedCountByEnv(c.env);
+  } catch {
+    return c.json(
+      { error: "service_unavailable", message: "Database unavailable" },
+      503,
+    );
+  }
+
+  let result;
+  try {
+    result = await runRematchSweep(c.env, totalPending, {
+      limit,
+      perRowTimeoutMs: REMATCH_PER_ROW_TIMEOUT_MS,
+      candidatesPerRow: REMATCH_CANDIDATES_PER_ROW,
+    });
+  } catch {
+    return c.json(
+      { error: "service_unavailable", message: "Database unavailable" },
+      503,
+    );
+  }
+
+  const summary = summariseSweep(result);
+  console.log(
+    JSON.stringify({
+      event: "rematch_sweep",
+      limit,
+      ...summary,
+      duration_ms: Date.now() - startedAtMs,
+    }),
+  );
+
+  return c.json(result, 200);
 });
 
 unmatchedRoute.post("/:spotify_id/match", async (c) => {
@@ -235,6 +322,134 @@ unmatchedRoute.get("/:spotify_id/search", async (c) => {
     {
       query: queryResult.q,
       candidates: flat,
+      fetched_at: new Date().toISOString(),
+    },
+    200,
+  );
+});
+
+// F-025: single-row rematch variant. Shares the F-024 response shape so the
+// UI can render the result with its existing candidate list. Read-only —
+// selection still goes through POST /:spotify_id/match.
+unmatchedRoute.get("/:spotify_id/rematch", async (c) => {
+  const startedAtMs = Date.now();
+  const spotifyId = c.req.param("spotify_id");
+
+  const principal = c.get("principal");
+  const principalKey =
+    principal?.kind === "user" ? principal.email : (principal?.kind ?? "anonymous");
+  const take = takeToken(principalKey);
+  if (!take.allowed) {
+    emitRowLog({
+      spotify_id: spotifyId,
+      q_len: 0,
+      result_count: null,
+      tidal_status: null,
+      error: null,
+      duration_ms: Date.now() - startedAtMs,
+    });
+    c.header("Retry-After", String(take.retryAfterSec));
+    return c.json(
+      { error: "rate_limited", message: "Too many rematches, please wait" },
+      429,
+    );
+  }
+
+  let row;
+  try {
+    row = await getPendingUnmatched(c.env, spotifyId);
+  } catch {
+    emitRowLog({
+      spotify_id: spotifyId,
+      q_len: 0,
+      result_count: null,
+      tidal_status: null,
+      error: null,
+      duration_ms: Date.now() - startedAtMs,
+    });
+    return c.json(
+      { error: "service_unavailable", message: "Database unavailable" },
+      503,
+    );
+  }
+  if (row === null) {
+    emitRowLog({
+      spotify_id: spotifyId,
+      q_len: 0,
+      result_count: null,
+      tidal_status: null,
+      error: null,
+      duration_ms: Date.now() - startedAtMs,
+    });
+    return c.json(
+      { error: "unknown_spotify_id", message: "No pending unmatched row for spotify_id" },
+      404,
+    );
+  }
+
+  const query = buildRematchQuery(row.spotify_artist, row.spotify_title);
+  if (query === null) {
+    emitRowLog({
+      spotify_id: spotifyId,
+      q_len: 0,
+      result_count: null,
+      tidal_status: null,
+      error: "invalid_input",
+      duration_ms: Date.now() - startedAtMs,
+    });
+    return c.json(
+      { error: "invalid_input", message: "Track metadata could not form a rematch query" },
+      400,
+    );
+  }
+
+  const tidal = await searchOneRematch(
+    c.env,
+    query,
+    REMATCH_PER_ROW_TIMEOUT_MS,
+    REMATCH_CANDIDATES_PER_ROW,
+  );
+
+  if (!tidal.ok) {
+    emitRowLog({
+      spotify_id: spotifyId,
+      q_len: query.length,
+      result_count: null,
+      tidal_status: tidal.tidalStatus,
+      error: tidal.error,
+      duration_ms: Date.now() - startedAtMs,
+    });
+    if (tidal.error === "tidal_timeout") {
+      return c.json(
+        { error: "tidal_timeout", message: "Tidal upstream timed out" },
+        504,
+      );
+    }
+    if (tidal.error === "tidal_reauth_required") {
+      return c.json(
+        { error: "tidal_reauth_required", message: "Tidal session expired" },
+        502,
+      );
+    }
+    return c.json(
+      { error: "tidal_upstream_error", message: "Tidal upstream failed" },
+      502,
+    );
+  }
+
+  emitRowLog({
+    spotify_id: spotifyId,
+    q_len: query.length,
+    result_count: tidal.candidates.length,
+    tidal_status: tidal.tidalStatus,
+    error: null,
+    duration_ms: Date.now() - startedAtMs,
+  });
+
+  return c.json(
+    {
+      query,
+      candidates: tidal.candidates,
       fetched_at: new Date().toISOString(),
     },
     200,
