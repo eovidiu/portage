@@ -113,6 +113,37 @@ export async function listPending(
 }
 
 /**
+ * F-025: fetch a single pending unmatched row joined with its track
+ * metadata. Returns null when no pending row exists for the given
+ * spotify_id (used to distinguish "unknown id" from "valid id, but
+ * already matched/skipped" in the single-row rematch route).
+ */
+export async function getPendingUnmatched(
+  env: Env,
+  spotifyId: string,
+): Promise<Pick<PendingUnmatchedRow, "spotify_id" | "spotify_artist" | "spotify_title" | "spotify_album"> | null> {
+  const sql = neon(env.DATABASE_URL);
+  const rows = await sql(
+    `SELECT u.spotify_id,
+            t.artist AS spotify_artist,
+            t.title  AS spotify_title,
+            t.album  AS spotify_album
+     FROM unmatched u
+     JOIN tracks t ON t.spotify_id = u.spotify_id
+     WHERE u.status = 'pending' AND u.spotify_id = $1
+     LIMIT 1`,
+    [spotifyId],
+  );
+  const list = rows as Array<{
+    spotify_id: string;
+    spotify_artist: string;
+    spotify_title: string;
+    spotify_album: string | null;
+  }>;
+  return list[0] ?? null;
+}
+
+/**
  * Atomically inserts a matches row and sets unmatched.status = 'matched'.
  * Uses a transaction to enforce I-001.
  */
