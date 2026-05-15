@@ -29,10 +29,18 @@ export interface ResolvedTidalCandidate {
   title: string;
   /** `attributes.name` of the first artist resolved via included[] (default ""). */
   primaryArtist: string;
+  /**
+   * All artists resolved from `relationships.artists.data[]` via included[],
+   * in document order. Empty when none resolvable. F-024 (manual picker)
+   * renders the full list; F-007 (fuzzy) only consults `primaryArtist`.
+   */
+  artists: string[];
   /** `attributes.title` of the first album resolved via included[] (default ""). */
   albumTitle: string;
   /** Parsed from `attributes.duration` (ISO-8601), null if missing/unparseable. */
   durationMs: number | null;
+  /** `attributes.isrc` from the Tidal track resource, null when absent. */
+  isrc: string | null;
 }
 
 export interface ScoreBreakdown {

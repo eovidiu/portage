@@ -68,6 +68,19 @@ export async function countTracks(env: Env): Promise<number> {
   return (rows as Record<string, unknown>[])[0].n as number;
 }
 
+/**
+ * F-024: cheap existence check used by the manual Tidal-search route to
+ * return 404 unknown_spotify_id before any upstream call.
+ */
+export async function trackExists(env: Env, spotifyId: string): Promise<boolean> {
+  const sql = neon(env.DATABASE_URL);
+  const rows = await sql(
+    `SELECT 1 FROM tracks WHERE spotify_id = $1 LIMIT 1`,
+    [spotifyId],
+  );
+  return (rows as unknown[]).length > 0;
+}
+
 // F-015: returns up to `limit` tracks eligible for a fresh match attempt.
 // A track is eligible iff it is NOT already matched AND either has no
 // `unmatched` row OR is pending and was last attempted >7 days ago. Skipped
