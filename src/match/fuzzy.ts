@@ -1,45 +1,21 @@
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
-import { tidalFetch } from "../providers/tidal/client";
 import { insertMatch } from "../db/matches";
 import { upsertUnmatched } from "../db/unmatched";
 import { normaliseTitle } from "./title";
 import { scoreCandidate, type ResolvedTidalCandidate } from "./score";
-import {
-  parseIsoDurationMs,
-  buildIncludedIndex,
-  lookupIncluded,
-  type JsonApiResource,
-  type IncludedIndex,
-} from "./json-api";
+import { searchTidalCandidates } from "./tidal-search";
 import type { Env } from "../env";
 
 /**
- * Tidal Open API v2 — fuzzy search by artist+title.
+ * F-007 fuzzy matcher. Iterates pending unmatched tracks, asks
+ * `searchTidalCandidates` for Tidal candidates, ranks by the weighted score
+ * in score.ts, and either records a match or upserts an unmatched row.
  *
- * We hit the singular `/searchResults/{id}` endpoint with
- * `?include=tracks,artists,albums` so the response carries:
- *   - data.relationships.tracks.data[]: refs to top track candidates
- *   - included[]:                       full Tracks/Artists/Albums resources
- *
- * The relationships variant `/searchResults/{id}/relationships/tracks` only
- * accepts `include=tracks` per the OAS, which leaves the candidates without
- * resolvable artist/album metadata — the F-007 weighted score (artist 0.30 +
- * album 0.10) couldn't reach the 0.85 accept threshold without those.
- *
- * Pagination on this endpoint is `page[cursor]`, NOT `limit`. F-007-R3 caps
- * at 5 candidates; we slice client-side from `relationships.tracks.data[]`.
+ * The Tidal upstream call shape (URL, 429 retry, JSON:API walk) lives in
+ * `tidal-search.ts` and is shared with F-024 (manual Tidal picker). Keeping
+ * one place to update the "verified against OAS" annotation prevents the
+ * 2026-05-02-style compound-include incident from repeating.
  */
-// Verified: 2026-04-27 against https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json (path /v2/searchResults/{id} GET, camelCase; include enum allows tracks,artists,albums; data is SearchResults_Resource_Object).
-// 2026-05-02 prod fix: bare `include=tracks,artists,albums` returns tracks in
-// included[] but NOT the artists/albums of those tracks (those are siblings of
-// the searchResults resource, not children of its track relationships). For
-// the matcher's per-candidate artist/album resolution we need compound include
-// paths `tracks.artists` and `tracks.albums` per JSON:API §6.2 (relationship
-// path traversal). Without these, every candidate had primaryArtist=""
-// /albumTitle="" → artistScore=0/albumScore=0 → max possible total 0.60,
-// guaranteed-below-0.85 threshold → 100% fuzzy rejection rate.
-// Verified: 2026-04-27 against https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json (path /v2/searchResults/{id} GET, camelCase; include enum allows tracks,artists,albums; data is SearchResults_Resource_Object).
-const TIDAL_SEARCH_BASE = "https://openapi.tidal.com/v2/searchResults";
 
 const ACCEPT_THRESHOLD = 0.85;
 const TIE_EPSILON = 0.001;
@@ -63,87 +39,6 @@ export interface FuzzyMatchResult {
   matched: number;
   unmatched: number;
   errors: Array<{ spotify_id: string; error_code: string; message: string }>;
-}
-
-async function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-async function searchTidal(
-  env: Env,
-  query: string,
-): Promise<{ response: Response; retried: boolean }> {
-  const encoded = encodeURIComponent(query);
-  const url = `${TIDAL_SEARCH_BASE}/${encoded}?include=tracks,tracks.artists,tracks.albums`;
-  const first = await tidalFetch(env, url);
-  if (first.status !== 429) return { response: first, retried: false };
-
-  const retryAfter = parseInt(first.headers.get("Retry-After") ?? "1", 10);
-  await sleep(retryAfter * 1000);
-
-  const second = await tidalFetch(env, url);
-  return { response: second, retried: true };
-}
-
-/** Resolve a single track resource into a scoring-ready candidate. */
-function resolveTrack(
-  track: JsonApiResource,
-  index: IncludedIndex,
-): ResolvedTidalCandidate {
-  const attrs = track.attributes ?? {};
-  const title = typeof attrs.title === "string" ? attrs.title : "";
-  const durationMs = parseIsoDurationMs(attrs.duration);
-
-  const artistRel = track.relationships?.artists?.data;
-  const firstArtistRef = Array.isArray(artistRel) ? artistRel[0] : undefined;
-  const artistResource = firstArtistRef
-    ? lookupIncluded(index, "artists", firstArtistRef.id)
-    : undefined;
-  const artistName = artistResource?.attributes?.name;
-  const primaryArtist = typeof artistName === "string" ? artistName : "";
-
-  const albumRel = track.relationships?.albums?.data;
-  const firstAlbumRef = Array.isArray(albumRel) ? albumRel[0] : undefined;
-  const albumResource = firstAlbumRef
-    ? lookupIncluded(index, "albums", firstAlbumRef.id)
-    : undefined;
-  const albumTitleAttr = albumResource?.attributes?.title;
-  const albumTitle = typeof albumTitleAttr === "string" ? albumTitleAttr : "";
-
-  return { id: track.id, title, primaryArtist, albumTitle, durationMs };
-}
-
-/**
- * Walk a `/searchResults/{id}` response: pick top track refs from
- * `data.relationships.tracks.data[]`, resolve each via `included[]`, and
- * cap at MAX_CANDIDATES per F-007-R3.
- */
-function extractCandidates(body: unknown): ResolvedTidalCandidate[] {
-  if (!body || typeof body !== "object") return [];
-  const b = body as Record<string, unknown>;
-
-  const data = b.data as
-    | {
-        relationships?: {
-          tracks?: { data?: Array<{ id: string; type: string }> };
-        };
-      }
-    | undefined;
-  const trackRefs = data?.relationships?.tracks?.data;
-  if (!Array.isArray(trackRefs)) return [];
-
-  const includedRaw = Array.isArray(b.included) ? (b.included as JsonApiResource[]) : [];
-  const index = buildIncludedIndex(includedRaw);
-
-  const out: ResolvedTidalCandidate[] = [];
-  for (const ref of trackRefs) {
-    if (out.length >= MAX_CANDIDATES) break;
-    if (!ref || typeof ref.id !== "string" || ref.type !== "tracks") continue;
-    const track = lookupIncluded(index, "tracks", ref.id);
-    if (!track) continue;
-    out.push(resolveTrack(track, index));
-  }
-  return out;
 }
 
 function rankCandidates(
@@ -214,19 +109,9 @@ export async function matchByFuzzy(
   for (const track of tracks) {
     const query = `${normaliseTitle(track.artist)} ${normaliseTitle(track.title)}`;
 
-    let tidalResponse: Response;
+    let result;
     try {
-      const { response, retried } = await searchTidal(env, query);
-      if (response.status === 429 && retried) {
-        errors.push({
-          spotify_id: track.spotify_id,
-          error_code: "tidal_429",
-          message: "Second 429 received; track deferred to next run",
-        });
-        unmatched++;
-        continue;
-      }
-      tidalResponse = response;
+      result = await searchTidalCandidates(env, query);
     } catch (err) {
       errors.push({
         spotify_id: track.spotify_id,
@@ -237,20 +122,27 @@ export async function matchByFuzzy(
       continue;
     }
 
-    if (!tidalResponse.ok) {
+    if (result.status === 429 && result.retried) {
       errors.push({
         spotify_id: track.spotify_id,
-        error_code: `tidal_${tidalResponse.status}`,
-        message: `Tidal returned HTTP ${tidalResponse.status}`,
+        error_code: "tidal_429",
+        message: "Second 429 received; track deferred to next run",
       });
       unmatched++;
       continue;
     }
 
-    let body: unknown;
-    try {
-      body = await tidalResponse.json();
-    } catch {
+    if (result.status >= 400) {
+      errors.push({
+        spotify_id: track.spotify_id,
+        error_code: `tidal_${result.status}`,
+        message: `Tidal returned HTTP ${result.status}`,
+      });
+      unmatched++;
+      continue;
+    }
+
+    if (result.bodyParseError) {
       errors.push({
         spotify_id: track.spotify_id,
         error_code: "tidal_parse_error",
@@ -260,7 +152,7 @@ export async function matchByFuzzy(
       continue;
     }
 
-    const candidates = extractCandidates(body);
+    const candidates = result.candidates.slice(0, MAX_CANDIDATES);
 
     if (candidates.length === 0) {
       console.log(

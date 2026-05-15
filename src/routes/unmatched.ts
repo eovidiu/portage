@@ -1,11 +1,19 @@
 // F-012: Unmatched review queue — GET /unmatched + POST /unmatched/:spotify_id/match + skip
+// F-024: GET /unmatched/:spotify_id/search — manual Tidal catalog search proxy
 import { Hono } from "hono";
 import type { Env } from "../env";
 import { listPending, markMatched, markSkipped } from "../db/unmatched";
+import { trackExists } from "../db/tracks";
 import { tidalFetch } from "../providers/tidal/client";
+import { TidalReauthRequired } from "../providers/tidal/oauth";
+import { searchTidalCandidates } from "../match/tidal-search";
+import { validateSearchQuery, validateSearchLimit } from "./search-validation";
+import { mapCandidateToResponseShape } from "./search-mapper";
+import { takeToken } from "../middleware/rate-limit";
 
 const LIMIT_DEFAULT = 20;
 const LIMIT_MAX = 100;
+const SEARCH_TIMEOUT_MS = 3_000;
 
 // Used as `${TIDAL_TRACKS_BASE}/${tidal_id}` to confirm a manually-supplied
 // tidal_id resolves before the I-001 atomic move (markMatched). Only the HTTP
@@ -15,7 +23,11 @@ const LIMIT_MAX = 100;
 // Verified: 2026-04-27 against https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json (path /v2/tracks/{id} GET; path param id required; 404 documented as Default404ResponseBody; countryCode optional, injected by tidalFetch).
 const TIDAL_TRACKS_BASE = "https://openapi.tidal.com/v2/tracks";
 
-const unmatchedRoute = new Hono<{ Bindings: Env }>();
+type RoutePrincipal = { kind: "user"; email: string } | { kind: "service" };
+const unmatchedRoute = new Hono<{
+  Bindings: Env;
+  Variables: { principal?: RoutePrincipal };
+}>();
 
 unmatchedRoute.get("/", async (c) => {
   const rawLimit = parseInt(c.req.query("limit") ?? String(LIMIT_DEFAULT), 10);
@@ -75,6 +87,157 @@ unmatchedRoute.post("/:spotify_id/match", async (c) => {
   }
 });
 
+// F-024: manual Tidal catalog search. The route nests under /unmatched/:spotify_id
+// so it inherits the same CF Access + JWT middleware the rest of the router does
+// (applied at app level in src/index.ts), and so the spotify_id stays paired with
+// the existing /match and /skip handlers in the UI's mental model.
+unmatchedRoute.get("/:spotify_id/search", async (c) => {
+  const startedAtMs = Date.now();
+  const spotifyId = c.req.param("spotify_id");
+
+  const queryResult = validateSearchQuery(c.req.query("q"));
+  if (!queryResult.ok) {
+    emitSearchLog({
+      spotify_id: spotifyId,
+      q_len: 0,
+      result_count: null,
+      tidal_status: null,
+      duration_ms: Date.now() - startedAtMs,
+    });
+    return c.json({ error: queryResult.error, message: queryResult.message }, 400);
+  }
+
+  const limitResult = validateSearchLimit(c.req.query("limit"));
+  if (!limitResult.ok) {
+    emitSearchLog({
+      spotify_id: spotifyId,
+      q_len: queryResult.q.length,
+      result_count: null,
+      tidal_status: null,
+      duration_ms: Date.now() - startedAtMs,
+    });
+    return c.json({ error: limitResult.error, message: limitResult.message }, 400);
+  }
+
+  let exists: boolean;
+  try {
+    exists = await trackExists(c.env, spotifyId);
+  } catch {
+    emitSearchLog({
+      spotify_id: spotifyId,
+      q_len: queryResult.q.length,
+      result_count: null,
+      tidal_status: null,
+      duration_ms: Date.now() - startedAtMs,
+    });
+    return c.json({ error: "service_unavailable", message: "Database unavailable" }, 503);
+  }
+  if (!exists) {
+    emitSearchLog({
+      spotify_id: spotifyId,
+      q_len: queryResult.q.length,
+      result_count: null,
+      tidal_status: null,
+      duration_ms: Date.now() - startedAtMs,
+    });
+    return c.json({ error: "unknown_spotify_id", message: "spotify_id not found" }, 404);
+  }
+
+  const principal = c.get("principal");
+  const principalKey =
+    principal?.kind === "user" ? principal.email : (principal?.kind ?? "anonymous");
+  const take = takeToken(principalKey);
+  if (!take.allowed) {
+    emitSearchLog({
+      spotify_id: spotifyId,
+      q_len: queryResult.q.length,
+      result_count: null,
+      tidal_status: null,
+      duration_ms: Date.now() - startedAtMs,
+    });
+    c.header("Retry-After", String(take.retryAfterSec));
+    return c.json({ error: "rate_limited", message: "Too many searches, please wait" }, 429);
+  }
+
+  let searchResult;
+  try {
+    searchResult = await raceWithTimeout(
+      searchTidalCandidates(c.env, queryResult.q),
+      SEARCH_TIMEOUT_MS,
+    );
+  } catch (err) {
+    if (err instanceof TidalReauthRequired) {
+      emitSearchLog({
+        spotify_id: spotifyId,
+        q_len: queryResult.q.length,
+        result_count: null,
+        tidal_status: null,
+        duration_ms: Date.now() - startedAtMs,
+      });
+      return c.json(
+        { error: "tidal_reauth_required", message: "Tidal session expired" },
+        502,
+      );
+    }
+    if (err instanceof SearchTimeout) {
+      emitSearchLog({
+        spotify_id: spotifyId,
+        q_len: queryResult.q.length,
+        result_count: null,
+        tidal_status: null,
+        duration_ms: Date.now() - startedAtMs,
+      });
+      return c.json({ error: "tidal_timeout", message: "Tidal upstream timed out" }, 504);
+    }
+    emitSearchLog({
+      spotify_id: spotifyId,
+      q_len: queryResult.q.length,
+      result_count: null,
+      tidal_status: null,
+      duration_ms: Date.now() - startedAtMs,
+    });
+    return c.json(
+      { error: "tidal_upstream_error", message: "Tidal upstream failed" },
+      502,
+    );
+  }
+
+  if (searchResult.status >= 400 || searchResult.bodyParseError) {
+    emitSearchLog({
+      spotify_id: spotifyId,
+      q_len: queryResult.q.length,
+      result_count: null,
+      tidal_status: searchResult.status,
+      duration_ms: Date.now() - startedAtMs,
+    });
+    return c.json(
+      { error: "tidal_upstream_error", message: "Tidal upstream returned an error" },
+      502,
+    );
+  }
+
+  const flat = searchResult.candidates
+    .slice(0, limitResult.limit)
+    .map(mapCandidateToResponseShape);
+
+  emitSearchLog({
+    spotify_id: spotifyId,
+    q_len: queryResult.q.length,
+    result_count: flat.length,
+    tidal_status: searchResult.status,
+    duration_ms: Date.now() - startedAtMs,
+  });
+
+  return c.json(
+    {
+      query: queryResult.q,
+      candidates: flat,
+      fetched_at: new Date().toISOString(),
+    },
+    200,
+  );
+});
+
 unmatchedRoute.post("/:spotify_id/skip", async (c) => {
   const contentType = c.req.header("content-type") ?? "";
   if (!contentType.includes("application/json")) {
@@ -90,5 +253,55 @@ unmatchedRoute.post("/:spotify_id/skip", async (c) => {
     return c.json({ error: "service_unavailable" }, 503);
   }
 });
+
+// --- F-024 helpers ------------------------------------------------------
+
+/**
+ * F-024 R6: structured log line emitted exactly once per request. Carries
+ * only non-PII signals — never the raw query, the principal email, or any
+ * token material. The presence of `tidal_status` differentiates "we got
+ * to upstream" from "we short-circuited before upstream".
+ */
+function emitSearchLog(fields: {
+  spotify_id: string;
+  q_len: number;
+  result_count: number | null;
+  tidal_status: number | null;
+  duration_ms: number;
+}): void {
+  console.log(
+    JSON.stringify({
+      event: "manual_search",
+      spotify_id: fields.spotify_id,
+      q_len: fields.q_len,
+      result_count: fields.result_count,
+      tidal_status: fields.tidal_status,
+      duration_ms: fields.duration_ms,
+    }),
+  );
+}
+
+class SearchTimeout extends Error {
+  constructor() {
+    super("search_timeout");
+    this.name = "SearchTimeout";
+  }
+}
+
+async function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new SearchTimeout()), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
 
 export default unmatchedRoute;
