@@ -192,6 +192,21 @@ describe("T-012-06: GET /unmatched — items without candidates return candidate
   });
 });
 
+// T-012-13: GET /unmatched includes server-side total (true pending count)
+describe("T-012-13: GET /unmatched — includes total from getUnmatchedCount", () => {
+  it("returns total in response body so the UI can show a count beyond limit", async () => {
+    mockListPending.mockResolvedValueOnce([makePendingRow()]);
+    const { getUnmatchedCountByEnv } = await import("../../src/db/unmatched");
+    vi.mocked(getUnmatchedCountByEnv).mockResolvedValueOnce(137);
+
+    const res = await doFetch("/unmatched");
+    expect(res.status).toBe(200);
+    const body = await res.json() as { items: unknown[]; total: number };
+    expect(body.total).toBe(137);
+    expect(body.items).toHaveLength(1);
+  });
+});
+
 // T-012-07: POST /unmatched/:spotify_id/match writes matches row
 describe("T-012-07: POST /unmatched/:spotify_id/match — success", () => {
   it("returns 200 with match row when Tidal track is found", async () => {

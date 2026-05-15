@@ -2,7 +2,7 @@
 // F-024: GET /unmatched/:spotify_id/search — manual Tidal catalog search proxy
 import { Hono } from "hono";
 import type { Env } from "../env";
-import { listPending, markMatched, markSkipped } from "../db/unmatched";
+import { listPending, markMatched, markSkipped, getUnmatchedCountByEnv } from "../db/unmatched";
 import { trackExists } from "../db/tracks";
 import { tidalFetch } from "../providers/tidal/client";
 import { TidalReauthRequired } from "../providers/tidal/oauth";
@@ -36,9 +36,12 @@ unmatchedRoute.get("/", async (c) => {
     : Math.min(rawLimit, LIMIT_MAX);
 
   try {
-    const rows = await listPending(c.env, { limit });
+    const [rows, total] = await Promise.all([
+      listPending(c.env, { limit }),
+      getUnmatchedCountByEnv(c.env),
+    ]);
     const items = rows.map((r) => ({ ...r, candidates: r.candidates ?? [] }));
-    return c.json({ items });
+    return c.json({ items, total });
   } catch {
     return c.json({ error: "service_unavailable" }, 503);
   }

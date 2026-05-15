@@ -38,6 +38,16 @@ export async function getUnmatchedCount(
 }
 
 /**
+ * Env-bound wrapper around getUnmatchedCount. Lives in the db layer so that
+ * route-level vi.mock(db/unmatched) covers it cleanly — the neon() call
+ * resolves to the real connection only when this module is unmocked.
+ */
+export async function getUnmatchedCountByEnv(env: Env): Promise<number> {
+  const sql = neon(env.DATABASE_URL);
+  return getUnmatchedCount(sql);
+}
+
+/**
  * Re-queue a spotify_id as unmatched because its Tidal match is no longer valid.
  * Unlike upsertUnmatched, this bypasses the status='pending' guard so that
  * previously matched/skipped rows can be re-queued.
