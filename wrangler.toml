@@ -21,6 +21,14 @@ TIDAL_PLAYLIST_TITLE = "Spotify Liked"
 SPOTIFY_REDIRECT_URI = "https://portage.eovidiu.co.uk/auth/spotify/callback"
 TIDAL_REDIRECT_URI = "https://portage.eovidiu.co.uk/auth/tidal/callback"
 
+
+# F-019: Cloudflare Access JWT validation. Both values are public — TEAM is
+# visible in the CF Access redirect URL, AUD is part of every CF Access JWT's
+# `aud` claim. Kept in [vars] rather than `wrangler secret put` so changes go
+# through PR review.
+CF_ACCESS_TEAM = "eovidiu"
+CF_ACCESS_AUD = "56f972bf34c35729e737048ba533d1444ba7951cbd4795d3d59f20167daabd6c"
+
 [observability]
 [observability.logs]
 enabled = true
