@@ -248,11 +248,15 @@ export async function listRunTracks(
     ? `AND m.method = '${filters.method}'`
     : "";
 
+  // F-027 hot-fix: cast NUMERIC -> float8 so the Neon driver emits a real
+  // JavaScript number (not the string "1.00") on the wire. The SPA's
+  // ConfidenceCell calls .toFixed() on this value; a string would crash
+  // render with no error boundary in place.
   const matchedSelect = `
     SELECT
       t.spotify_id, t.title, t.artist, t.album, t.isrc,
       'matched'::text AS status,
-      m.tidal_id, m.method, m.confidence,
+      m.tidal_id, m.method, m.confidence::float8 AS confidence,
       NULL::text AS reason
     FROM matches m
     JOIN tracks t ON t.spotify_id = m.spotify_id
@@ -266,7 +270,7 @@ export async function listRunTracks(
       'unmatched'::text AS status,
       NULL::text AS tidal_id,
       NULL::text AS method,
-      NULL::numeric AS confidence,
+      NULL::float8 AS confidence,
       u.reason
     FROM unmatched u
     JOIN tracks t ON t.spotify_id = u.spotify_id
