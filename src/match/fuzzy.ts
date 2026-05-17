@@ -209,10 +209,22 @@ export async function matchByFuzzy(
           decision: "rejected_below_threshold",
         }),
       );
+      // F-027a: persist the top 3 ranked candidates alongside the row so
+      // the operator can pick from them on the run-detail page later.
+      // Only on the fuzzy_below_threshold branch — no_candidates has
+      // nothing to persist (caught upstream).
+      const persistedCandidates = ranked.slice(0, 3).map((scored) => ({
+        tidal_id: scored.candidate.id,
+        title: scored.candidate.title,
+        artist: scored.candidate.primaryArtist,
+        album: scored.candidate.albumTitle || null,
+        score: Math.round(scored.score * 100) / 100,
+      }));
       await upsertUnmatched(sql, {
         spotify_id: track.spotify_id,
         reason: "fuzzy_below_threshold",
         sync_run_id: syncRunId,
+        candidates: persistedCandidates,
       });
       unmatched++;
     }

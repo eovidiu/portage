@@ -200,6 +200,62 @@ describe("T-007-06: below-threshold result enqueues unmatched", () => {
   });
 });
 
+// T-027a-01: fuzzy_below_threshold persists top 3 candidates as JSONB
+describe("T-027a-01: fuzzy_below_threshold persists top-3 ranked candidates", () => {
+  it("writes the top 3 ranked Tidal candidates onto the unmatched row's candidates column", async () => {
+    // 5 candidates so the function has more than 3 to rank
+    const candidates = [
+      makeTidalTrack({ title: "Yesterday A", artistName: "Wrong Artist", albumTitle: "Album A", durationSeconds: 240 }),
+      makeTidalTrack({ title: "Yesterday B", artistName: "Another Wrong", albumTitle: "Album B", durationSeconds: 245 }),
+      makeTidalTrack({ title: "Yesterday C", artistName: "Third Wrong", albumTitle: "Album C", durationSeconds: 250 }),
+      makeTidalTrack({ title: "Yesterday D", artistName: "Fourth Wrong", albumTitle: "Album D", durationSeconds: 255 }),
+      makeTidalTrack({ title: "Yesterday E", artistName: "Fifth Wrong", albumTitle: "Album E", durationSeconds: 260 }),
+    ];
+    mockTidalFetch.mockResolvedValueOnce(tidalSearchOk(candidates));
+
+    await matchByFuzzy(makeEnv());
+
+    const upsertCall = mockSql.mock.calls.find(
+      ([q]: [string]) => typeof q === "string" && q.includes("INSERT INTO unmatched"),
+    );
+    const [, params] = upsertCall as [string, unknown[]];
+    // params: [spotify_id, reason, sync_run_id, candidates JSON string]
+    const candidatesJson = params[3] as string | null;
+    expect(typeof candidatesJson).toBe("string");
+    const parsed = JSON.parse(candidatesJson as string);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(3);
+    // Each carries the spec-mandated shape
+    for (const c of parsed) {
+      expect(typeof c.tidal_id).toBe("string");
+      expect(typeof c.title).toBe("string");
+      expect(typeof c.artist).toBe("string");
+      expect(typeof c.score).toBe("number");
+    }
+    // Sorted by score descending
+    expect(parsed[0].score).toBeGreaterThanOrEqual(parsed[1].score);
+    expect(parsed[1].score).toBeGreaterThanOrEqual(parsed[2].score);
+  });
+});
+
+// T-027a-02: no_candidates leaves candidates NULL
+describe("T-027a-02: no_candidates writes NULL into candidates column", () => {
+  it("does NOT persist candidates when the matcher had zero to consider", async () => {
+    mockTidalFetch.mockResolvedValueOnce(tidalSearchEmpty());
+
+    await matchByFuzzy(makeEnv());
+
+    const upsertCall = mockSql.mock.calls.find(
+      ([q]: [string]) => typeof q === "string" && q.includes("INSERT INTO unmatched"),
+    );
+    const [, params] = upsertCall as [string, unknown[]];
+    // params[1] is reason — confirm we're on the no_candidates branch
+    expect(params[1]).toBe("no_candidates");
+    // params[3] (candidates JSON) MUST be null on this branch
+    expect(params[3]).toBeNull();
+  });
+});
+
 // T-007-07: No candidates → unmatched with reason=no_candidates
 describe("T-007-07: no candidates enqueues unmatched with reason=no_candidates", () => {
   it("writes unmatched row with reason=no_candidates when Tidal returns empty", async () => {

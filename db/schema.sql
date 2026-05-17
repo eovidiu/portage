@@ -85,7 +85,12 @@ CREATE TABLE IF NOT EXISTS unmatched (
     -- the row predates the F-027 schema add — those rows aren't part of
     -- any specific run's manifest. The orchestrator passes the current
     -- runId on every upsert from F-027 onward.
-    sync_run_id     UUID REFERENCES sync_runs(run_id)
+    sync_run_id     UUID REFERENCES sync_runs(run_id),
+    -- F-027a: top 3 ranked Tidal candidates persisted at the moment of
+    -- fuzzy rejection so the operator can pick one from the run-detail
+    -- page later. Shape: [{tidal_id, title, artist, album, score}, …].
+    -- NULL for non-fuzzy_below_threshold reasons + pre-existing rows.
+    candidates      JSONB
 );
 CREATE INDEX IF NOT EXISTS idx_unmatched_sync_run_id ON unmatched(sync_run_id);
 
