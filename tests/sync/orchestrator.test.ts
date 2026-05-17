@@ -105,6 +105,7 @@ const DEFAULT_CONFIGS = [
     tidal_playlist_id: "tidal-liked-001",
     created_at: "2026-05-01T00:00:00Z",
     last_synced_at: null,
+    enabled: true,
   },
 ];
 
@@ -140,6 +141,7 @@ function setupProviders(overrides: {
     tidal_playlist_id: string | null;
     created_at: string;
     last_synced_at: string | null;
+    enabled: boolean;
   }>;
 } = {}) {
   mockMarkAbandoned.mockResolvedValue(0);

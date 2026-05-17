@@ -3,13 +3,15 @@ import type { NeonQueryFunction } from "@neondatabase/serverless";
 // F-016: registry of Spotify playlists synced into Tidal. The synthetic
 // '__liked__' row represents Liked Songs; extras come from
 // env.SPOTIFY_EXTRA_PLAYLIST_IDS via the seeder. tidal_playlist_id is null
-// until F-018 creates the Tidal counterpart on first sync.
+// until F-018 creates the Tidal counterpart on first sync. enabled (F-026a)
+// gates orchestrator sync per row — the GET handler returns all rows.
 export interface PlaylistConfigRow {
   spotify_playlist_id: string;
   spotify_name: string;
   tidal_playlist_id: string | null;
   created_at: string;
   last_synced_at: string | null;
+  enabled: boolean;
 }
 
 export interface PlaylistConfigUpsertInput {
@@ -37,7 +39,7 @@ export async function listPlaylistConfigs(
 ): Promise<PlaylistConfigRow[]> {
   const rows = await sql(
     `SELECT spotify_playlist_id, spotify_name, tidal_playlist_id,
-            created_at, last_synced_at
+            created_at, last_synced_at, enabled
        FROM playlist_configs`,
     [],
   );
@@ -50,7 +52,7 @@ export async function getPlaylistConfig(
 ): Promise<PlaylistConfigRow | null> {
   const rows = await sql(
     `SELECT spotify_playlist_id, spotify_name, tidal_playlist_id,
-            created_at, last_synced_at
+            created_at, last_synced_at, enabled
        FROM playlist_configs
       WHERE spotify_playlist_id = $1`,
     [spotifyPlaylistId],

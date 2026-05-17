@@ -92,6 +92,7 @@ describe("T-016-07: listPlaylistConfigs returns all rows", () => {
         tidal_playlist_id: null,
         created_at: "2026-05-08T00:00:00Z",
         last_synced_at: null,
+        enabled: true,
       },
       {
         spotify_playlist_id: "abc123",
@@ -99,6 +100,7 @@ describe("T-016-07: listPlaylistConfigs returns all rows", () => {
         tidal_playlist_id: "tidal-9",
         created_at: "2026-05-08T01:00:00Z",
         last_synced_at: "2026-05-08T02:00:00Z",
+        enabled: true,
       },
     ];
     mockQuery.mockResolvedValueOnce(dbRows);
