@@ -13,7 +13,7 @@ import { matchByIsrc } from "../match/isrc";
 import { matchByFuzzy } from "../match/fuzzy";
 import { writePlaylist } from "./playlist-writer";
 import { seedPlaylistConfigs } from "./playlist-config-seeder";
-import { listPlaylistConfigs } from "../db/playlist_configs";
+import { listEnabledPlaylistConfigs, markSynced } from "../db/playlist_configs";
 import { fetchPlaylistTracks } from "../providers/spotify/playlists";
 
 export type OrchestratorOutcome =
@@ -144,9 +144,13 @@ async function runSyncBody(
   // and any new SPOTIFY_EXTRA_PLAYLIST_IDS entries are upserted. Idempotent.
   await seedPlaylistConfigs(env);
 
-  // F-009-R17: list configs and split into __liked__ + extras (capped).
+  // F-009-R17 + F-026b: list ENABLED configs only and split into
+  // __liked__ + extras (capped). Disabled rows are skipped at the SQL
+  // level so they never consume subrequest budget. The SPA's GET
+  // /api/playlists still returns all rows (including disabled) — only
+  // the orchestrator filters.
   const sql = neon(env.DATABASE_URL);
-  const configs = await listPlaylistConfigs(sql);
+  const configs = await listEnabledPlaylistConfigs(sql);
   const liked = configs.find((c) => c.spotify_playlist_id === "__liked__");
   const extras = configs
     .filter((c) => c.spotify_playlist_id !== "__liked__")
@@ -267,6 +271,9 @@ async function runSyncBody(
         config.spotify_playlist_id,
         config.tidal_playlist_id,
       );
+      // F-026b: record last_synced_at on each per-row success. Per-row
+      // errors (caught below) leave the prior timestamp untouched.
+      await markSynced(sql, config.spotify_playlist_id, new Date().toISOString());
       console.log(
         JSON.stringify({
           event: "playlist_write_completed",
