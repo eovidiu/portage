@@ -1,8 +1,8 @@
 {
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
-  "total_features": 32,
-  "passing": 32,
+  "total_features": 33,
+  "passing": 33,
   "features": [
     {
       "id": "F014",
@@ -1019,6 +1019,37 @@
       "approaches_tried": [],
       "failure_reason": null,
       "discovered_via": "openspec/changes/playlists-table-and-toggle"
+    },
+    {
+      "id": "F-027",
+      "spec": "docs/specs/F-027-per-run-track-detail.md",
+      "test_spec": "docs/specs/T-027-per-run-track-detail.md",
+      "description": "Per-run track detail: GET /sync/runs/:run_id/tracks returning a paginated manifest joining tracks with matches + unmatched (both filtered by sync_run_id). Also adds unmatched.sync_run_id column + index and wires the orchestrator to write it from the fuzzy match path. Closes the SPA visibility gap on /runs.",
+      "priority": 13,
+      "status": "passing",
+      "scope": [
+        "db/schema.sql",
+        "src/db/unmatched.ts",
+        "src/db/sync_runs.ts",
+        "src/match/fuzzy.ts",
+        "src/routes/sync/runs.ts",
+        "tests/routes/sync/runs.test.ts"
+      ],
+      "depends_on": [],
+      "assigned_to": null,
+      "test_file": "tests/routes/sync/runs.test.ts",
+      "coverage": "776 tests passing (was 765, +11 new T-027 scenarios across the endpoint contract). All 9 spec scenarios + default-fallback paths covered.",
+      "notes": "Shipped via PR #21 (commit included in main as the squash). Live Neon DDL applied: ALTER TABLE unmatched ADD COLUMN sync_run_id UUID REFERENCES sync_runs(run_id) + idx_unmatched_sync_run_id. Existing rows backfill to NULL \u2014 documented as predating F-027. UI side UI-PHASE-14 shipped in portage-ui PR #10.",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [
+        "listRunTracks joins tracks \u22c8 matches + tracks \u22c8 unmatched as two SELECT halves UNION ALL'd inside a paginated subquery. Two queries: one for the items page, one for the filter-honored total count.",
+        "Status discriminator on each row instead of two endpoints (matched + unmatched). The matched half projects tidal_id/method/confidence with NULL reason; the unmatched half projects NULL tidal_id/method/confidence with reason. Mapper in TypeScript projects each row into the discriminated-union shape.",
+        "UUID regex pre-check before DB lookup so malformed run_ids 404 cleanly without a wasted query.",
+        "Reusing the same Bearer-JWT auth middleware as the rest of /sync \u2014 no separate auth wiring needed."
+      ],
+      "failure_reason": null,
+      "discovered_via": "openspec/changes/per-run-track-detail (SPA UI-PHASE-14 needed the per-run manifest)"
     }
   ]
 }
