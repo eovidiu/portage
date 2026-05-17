@@ -189,6 +189,15 @@ export interface RunTrackMatchedRow {
   confidence: number | null;
 }
 
+// F-027a: persisted top-3 ranked candidates from the failed fuzzy match.
+export interface RunTrackCandidate {
+  tidal_id: string;
+  title: string;
+  artist: string;
+  album: string | null;
+  score: number;
+}
+
 export interface RunTrackUnmatchedRow {
   spotify_id: string;
   title: string;
@@ -197,6 +206,10 @@ export interface RunTrackUnmatchedRow {
   isrc: string | null;
   status: "unmatched";
   reason: string;
+  // F-027a: present only when reason === "fuzzy_below_threshold" AND
+  // the matcher persisted candidates at decision time. Older rows + other
+  // reasons OMIT this field from the response (not null).
+  candidates?: RunTrackCandidate[];
 }
 
 export type RunTrackRow = RunTrackMatchedRow | RunTrackUnmatchedRow;
@@ -257,7 +270,8 @@ export async function listRunTracks(
       t.spotify_id, t.title, t.artist, t.album, t.isrc,
       'matched'::text AS status,
       m.tidal_id, m.method, m.confidence::float8 AS confidence,
-      NULL::text AS reason
+      NULL::text AS reason,
+      NULL::jsonb AS candidates
     FROM matches m
     JOIN tracks t ON t.spotify_id = m.spotify_id
     WHERE m.sync_run_id = $1
@@ -271,7 +285,8 @@ export async function listRunTracks(
       NULL::text AS tidal_id,
       NULL::text AS method,
       NULL::float8 AS confidence,
-      u.reason
+      u.reason,
+      u.candidates
     FROM unmatched u
     JOIN tracks t ON t.spotify_id = u.spotify_id
     WHERE u.sync_run_id = $1
@@ -305,6 +320,9 @@ export async function listRunTracks(
   // The DB returns matched rows with reason=null and unmatched rows with
   // tidal_id/method/confidence=null. Project into the discriminated-union
   // shape so the API response carries only the relevant fields per row.
+  // When the matched SELECT runs alone (status=matched), `candidates` is
+  // absent from the row entirely; UNION ALL adds NULLs into the matched
+  // half automatically when the unmatched half projects the column.
   const items: RunTrackRow[] = (itemsRows as Array<{
     spotify_id: string;
     title: string;
@@ -316,6 +334,7 @@ export async function listRunTracks(
     method: "isrc" | "fuzzy" | "manual" | null;
     confidence: number | null;
     reason: string | null;
+    candidates?: RunTrackCandidate[] | null;
   }>).map((row) => {
     if (row.status === "matched") {
       return {
@@ -330,7 +349,7 @@ export async function listRunTracks(
         confidence: row.confidence,
       };
     }
-    return {
+    const unmatched: RunTrackUnmatchedRow = {
       spotify_id: row.spotify_id,
       title: row.title,
       artist: row.artist,
@@ -339,6 +358,13 @@ export async function listRunTracks(
       status: "unmatched",
       reason: row.reason as string,
     };
+    // F-027a: only attach `candidates` when the column is non-null and
+    // non-empty. The key is OMITTED (not set to null) on older rows so
+    // the SPA can `'candidates' in row` cleanly.
+    if (Array.isArray(row.candidates) && row.candidates.length > 0) {
+      unmatched.candidates = row.candidates;
+    }
+    return unmatched;
   });
 
   return { total, items };

@@ -297,6 +297,97 @@ describe("T-012-10: POST /unmatched/:spotify_id/match — atomic transition", ()
   });
 });
 
+// T-027a-06: manual match without sync_run_id (status quo)
+describe("T-027a-06: POST /unmatched/:id/match — without sync_run_id", () => {
+  it("calls markMatched with syncRunId=null when body has no sync_run_id", async () => {
+    mockTidalFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: "TX" }), { status: 200 }),
+    );
+    mockMarkMatched.mockResolvedValueOnce({
+      spotify_id: "X",
+      tidal_id: "TX",
+      method: "manual" as const,
+      confidence: 1.0,
+      matched_at: "2026-04-25T08:00:00Z",
+    });
+
+    const res = await doFetch("/unmatched/X/match", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tidal_id: "TX" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockMarkMatched).toHaveBeenCalledWith(
+      expect.anything(),
+      "X",
+      "TX",
+      null,
+    );
+  });
+});
+
+// T-027a-07: manual match with valid sync_run_id
+describe("T-027a-07: POST /unmatched/:id/match — with sync_run_id (UUID)", () => {
+  it("passes the validated UUID through to markMatched", async () => {
+    const validRunId = "8e2f39ae-d1f2-4009-abc4-0738284b2ea9";
+    mockTidalFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: "TX" }), { status: 200 }),
+    );
+    mockMarkMatched.mockResolvedValueOnce({
+      spotify_id: "X",
+      tidal_id: "TX",
+      method: "manual" as const,
+      confidence: 1.0,
+      matched_at: "2026-04-25T08:00:00Z",
+    });
+
+    const res = await doFetch("/unmatched/X/match", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tidal_id: "TX", sync_run_id: validRunId }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockMarkMatched).toHaveBeenCalledWith(
+      expect.anything(),
+      "X",
+      "TX",
+      validRunId,
+    );
+  });
+});
+
+// T-027a-08: manual match with malformed sync_run_id is ignored, not rejected
+describe("T-027a-08: POST /unmatched/:id/match — malformed sync_run_id ignored", () => {
+  it("treats a non-UUID sync_run_id as NULL and succeeds", async () => {
+    mockTidalFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: "TX" }), { status: 200 }),
+    );
+    mockMarkMatched.mockResolvedValueOnce({
+      spotify_id: "X",
+      tidal_id: "TX",
+      method: "manual" as const,
+      confidence: 1.0,
+      matched_at: "2026-04-25T08:00:00Z",
+    });
+
+    const res = await doFetch("/unmatched/X/match", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tidal_id: "TX", sync_run_id: "not-a-uuid" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockMarkMatched).toHaveBeenCalledWith(
+      expect.anything(),
+      "X",
+      "TX",
+      null,
+    );
+  });
+});
+
 // T-012-11: POST /unmatched/:spotify_id/skip transitions to skipped
 describe("T-012-11: POST /unmatched/:spotify_id/skip — transitions to skipped", () => {
   it("returns 200 with status=skipped", async () => {

@@ -154,6 +154,15 @@ unmatchedRoute.post("/:spotify_id/match", async (c) => {
 
   const tidalId = (body as { tidal_id: string }).tidal_id;
 
+  // F-027a: optional sync_run_id propagates the originating run into the
+  // resulting matches.sync_run_id so the manual pick belongs to that
+  // run's manifest. Malformed values are ignored (NULL), not rejected,
+  // so the legacy `/unmatched` manual-match flow stays unchanged.
+  const rawRunId = (body as { sync_run_id?: unknown }).sync_run_id;
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const syncRunId =
+    typeof rawRunId === "string" && UUID_RE.test(rawRunId) ? rawRunId : null;
+
   let tidalRes: Response;
   try {
     tidalRes = await tidalFetch(c.env, `${TIDAL_TRACKS_BASE}/${encodeURIComponent(tidalId)}`);
@@ -170,7 +179,7 @@ unmatchedRoute.post("/:spotify_id/match", async (c) => {
   }
 
   try {
-    const result = await markMatched(c.env, spotifyId, tidalId);
+    const result = await markMatched(c.env, spotifyId, tidalId, syncRunId);
     return c.json(result, 200);
   } catch {
     return c.json({ error: "service_unavailable" }, 503);

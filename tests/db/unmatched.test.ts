@@ -101,7 +101,10 @@ describe("markMatched — atomic transaction (F-012-R8)", () => {
     expect(mockTransaction).toHaveBeenCalledOnce();
     expect(txCalls).toHaveLength(2);
     expect(txCalls[0][0]).toContain("INSERT INTO matches");
-    expect(txCalls[0][1]).toEqual(["spX", "tdX"]);
+    // F-027a: markMatched signature now carries an optional syncRunId
+    // (default null) so manual matches initiated from a run-detail page
+    // can propagate the originating run id onto matches.sync_run_id.
+    expect(txCalls[0][1]).toEqual(["spX", "tdX", null]);
     expect(txCalls[1][0]).toContain("UPDATE unmatched");
     expect(txCalls[1][0]).toContain("status = 'matched'");
     expect(txCalls[1][1]).toEqual(["spX"]);

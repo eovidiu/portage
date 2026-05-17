@@ -1,6 +1,16 @@
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 import type { Env } from "../env";
 
+// F-027a: top-3 Tidal candidates persisted on a fuzzy_below_threshold
+// rejection so the operator can pick one from the run-detail page later.
+export interface UnmatchedCandidate {
+  tidal_id: string;
+  title: string;
+  artist: string;
+  album: string | null;
+  score: number;
+}
+
 export interface UnmatchedRow {
   spotify_id: string;
   reason: string;
@@ -8,27 +18,38 @@ export interface UnmatchedRow {
   // on the row so the SPA can drill into a specific run's unmatched set.
   // Manual `/unmatched/:id/skip` writes (no run context) omit it.
   sync_run_id?: string | null;
+  // F-027a: optional. When passed (only from the fuzzy_below_threshold
+  // branch), persists the top 3 ranked Tidal candidates the matcher
+  // considered. Other reasons (no_candidates, manual skip) omit it.
+  candidates?: UnmatchedCandidate[] | null;
 }
 
 /**
  * Upsert an unmatched row. On conflict, increments attempts and updates
- * last_attempt_at, reason, and sync_run_id — but only when status is
- * still 'pending'. A previously matched/skipped row stays untouched.
+ * last_attempt_at, reason, sync_run_id, and candidates — but only when
+ * status is still 'pending'. A previously matched/skipped row stays
+ * untouched.
  */
 export async function upsertUnmatched(
   sql: NeonQueryFunction<false, false>,
   row: UnmatchedRow,
 ): Promise<void> {
   await sql(
-    `INSERT INTO unmatched (spotify_id, reason, attempts, last_attempt_at, status, sync_run_id)
-     VALUES ($1, $2, 1, now(), 'pending', $3)
+    `INSERT INTO unmatched (spotify_id, reason, attempts, last_attempt_at, status, sync_run_id, candidates)
+     VALUES ($1, $2, 1, now(), 'pending', $3, $4::jsonb)
      ON CONFLICT (spotify_id) DO UPDATE
        SET attempts        = unmatched.attempts + 1,
            last_attempt_at = now(),
            reason          = EXCLUDED.reason,
-           sync_run_id     = EXCLUDED.sync_run_id
+           sync_run_id     = EXCLUDED.sync_run_id,
+           candidates      = EXCLUDED.candidates
      WHERE unmatched.status = 'pending'`,
-    [row.spotify_id, row.reason, row.sync_run_id ?? null],
+    [
+      row.spotify_id,
+      row.reason,
+      row.sync_run_id ?? null,
+      row.candidates != null ? JSON.stringify(row.candidates) : null,
+    ],
   );
 }
 
@@ -152,10 +173,15 @@ export async function getPendingUnmatched(
  * Atomically inserts a matches row and sets unmatched.status = 'matched'.
  * Uses a transaction to enforce I-001.
  */
+// F-027a: optional syncRunId argument so manual matches initiated from a
+// run-detail page belong to that run's manifest. Existing callers (the
+// /unmatched manual-match flow) pass nothing and get sync_run_id = NULL,
+// preserving the historical behavior.
 export async function markMatched(
   env: Env,
   spotifyId: string,
   tidalId: string,
+  syncRunId: string | null = null,
 ): Promise<ManualMatchResult> {
   const sql = neon(env.DATABASE_URL);
   const now = new Date().toISOString();
@@ -163,13 +189,13 @@ export async function markMatched(
   await sql.transaction((txSql) => [
     txSql(
       `INSERT INTO matches (spotify_id, tidal_id, method, confidence, sync_run_id)
-       VALUES ($1, $2, 'manual', 1.00, NULL)
+       VALUES ($1, $2, 'manual', 1.00, $3)
        ON CONFLICT (spotify_id) DO UPDATE
          SET tidal_id   = EXCLUDED.tidal_id,
              method     = 'manual',
              confidence = 1.00,
-             sync_run_id = NULL`,
-      [spotifyId, tidalId],
+             sync_run_id = EXCLUDED.sync_run_id`,
+      [spotifyId, tidalId, syncRunId],
     ),
     txSql(
       `UPDATE unmatched SET status = 'matched' WHERE spotify_id = $1`,
