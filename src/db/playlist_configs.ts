@@ -46,6 +46,24 @@ export async function listPlaylistConfigs(
   return rows as unknown as PlaylistConfigRow[];
 }
 
+// F-026b: the orchestrator-only iteration source. Filters out disabled rows
+// at the SQL level so disabled playlists never enter the working set and
+// don't contribute to subrequest budget. `listPlaylistConfigs` stays
+// unchanged because the GET handler must return ALL rows (including
+// disabled ones) so the operator can see and re-enable them.
+export async function listEnabledPlaylistConfigs(
+  sql: NeonQueryFunction<false, false>,
+): Promise<PlaylistConfigRow[]> {
+  const rows = await sql(
+    `SELECT spotify_playlist_id, spotify_name, tidal_playlist_id,
+            created_at, last_synced_at, enabled
+       FROM playlist_configs
+      WHERE enabled = TRUE`,
+    [],
+  );
+  return rows as unknown as PlaylistConfigRow[];
+}
+
 export async function getPlaylistConfig(
   sql: NeonQueryFunction<false, false>,
   spotifyPlaylistId: string,
