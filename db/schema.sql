@@ -120,8 +120,15 @@ CREATE TABLE IF NOT EXISTS playlist_configs (
     spotify_name          TEXT NOT NULL,
     tidal_playlist_id     TEXT,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_synced_at        TIMESTAMPTZ
+    last_synced_at        TIMESTAMPTZ,
+    enabled               BOOLEAN NOT NULL DEFAULT TRUE
 );
+-- Added by F-026a (2026-05-17): per-playlist sync pause without removing the row.
+-- DEFAULT TRUE means existing rows take TRUE without a separate backfill UPDATE.
+-- The orchestrator's iteration query filters WHERE enabled = TRUE (F-026b); the
+-- GET /api/playlists handler returns ALL rows including disabled ones so the
+-- operator can see and re-enable them.
+ALTER TABLE playlist_configs ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT TRUE;
 
 -- F-016-R2: synthetic '__liked__' row is the stable key for Liked Songs.
 -- Idempotent — repeat schema applies leave the row unchanged.

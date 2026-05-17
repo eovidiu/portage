@@ -1,8 +1,8 @@
 {
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
-  "total_features": 28,
-  "passing": 27,
+  "total_features": 32,
+  "passing": 29,
   "features": [
     {
       "id": "F014",
@@ -912,9 +912,9 @@
       "id": "F-025",
       "spec": "openspec/changes/f-025-rematch-heuristic/specs/rematch-heuristic/spec.md",
       "test_spec": null,
-      "description": "Rematch heuristic — sweep + per-row Tidal catalog search using \"first two artist words + first title word\" to surface candidates for unmatched rows that F-007 fuzzy and F-024 full-title manual search both missed.",
+      "description": "Rematch heuristic \u2014 sweep + per-row Tidal catalog search using \"first two artist words + first title word\" to surface candidates for unmatched rows that F-007 fuzzy and F-024 full-title manual search both missed.",
       "priority": 7,
-      "status": "in-progress",
+      "status": "passing",
       "scope": [
         "src/match/rematch.ts",
         "src/routes/unmatched.ts",
@@ -923,16 +923,102 @@
         "tests/routes/unmatched.rematch.test.ts",
         "openspec/changes/f-025-rematch-heuristic/"
       ],
-      "depends_on": ["F-024"],
+      "depends_on": [
+        "F-024"
+      ],
       "assigned_to": null,
       "test_file": "tests/match/rematch.test.ts",
+      "coverage": "Project-wide coverage measurement remains structurally broken under @cloudflare/vitest-pool-workers (same gotcha as F-024). Behavioural surface: 16 helper tests in tests/match/rematch.test.ts (buildRematchQuery edge cases) + 22 route tests in tests/routes/unmatched.rematch.test.ts (sweep happy path, per-row error isolation, single-row variant, rate-limit bucket sharing with F-024, read-only contract). Full suite 725 \u2192 747 (+22 net).",
+      "notes": "Pure helper buildRematchQuery() + sweep + single-row variant on /unmatched router (inherits CF Access JWT). Sweep cap 25 keeps the route well under the Workers 50-subrequest budget; single-row variant takes a token from F-024's existing rate-limit bucket (no new bucket). Read-only \u2014 selection still flows through POST /:spotify_id/match. Sister UI change tracked in portage-ui repo. Shipped 2026-05-15 as PR #16 (squash-merged to e7113fc).",
+      "correction_cycles": 1,
+      "scope_expansions": [],
+      "approaches_tried": [
+        "TDD red-green: pure helper first (buildRematchQuery over artist+title strings \u2014 16 cases covering whitespace collapse, single-word artist, missing title, both-empty, unicode handling). Then route handler red tests for sweep (default limit=10, max 25, last_attempt_at DESC ordering) and per-row error isolation (one tidal_429 doesn't abort remaining rows \u2014 error recorded inline on RematchRow.error).",
+        "Reused F-024's searchTidalCandidates + rate-limit bucket directly. Single-row variant deliberately returns F-024's response shape so the UI candidate component renders both endpoints with one mapper. Read-only contract verified by assertion that no write paths (matches/unmatched/tracks tables) are touched."
+      ],
+      "failure_reason": null,
+      "discovered_via": "operator handheld trick after F-024 shipped: short rematch query consistently retrieves rows that full-title search misses (long featured-artist suffixes, parenthetical version markers)"
+    },
+    {
+      "id": "F-026a",
+      "spec": "docs/specs/F-026a-playlist-configs-columns.md",
+      "test_spec": "docs/specs/T-026a-playlist-configs-columns.md",
+      "description": "playlist_configs.enabled column + GET /api/playlists projection. Adds enabled BOOLEAN NOT NULL DEFAULT TRUE so the orchestrator and the SPA can pause sync per playlist without removing the row. last_synced_at was already shipped by F-016/F-018 — only enabled is net-new at the DB layer in this feature.",
+      "priority": 14,
+      "status": "pending",
+      "scope": [
+        "db/schema.sql",
+        "src/db/playlist_configs.ts",
+        "src/routes/playlists.ts",
+        "tests/routes/playlists.test.ts",
+        "docs/specs/F-026a-playlist-configs-columns.md",
+        "docs/specs/T-026a-playlist-configs-columns.md"
+      ],
+      "depends_on": [],
+      "assigned_to": "single-session",
+      "test_file": null,
       "coverage": null,
-      "notes": "Pure helper buildRematchQuery() + sweep + single-row variant. Sweep cap 25 keeps the route well under the Workers 50-subrequest budget; single-row variant takes a token from F-024's existing rate-limit bucket (no new bucket). Read-only — selection still flows through POST /:spotify_id/match. Sister UI change tracked in portage-ui repo.",
+      "notes": "OpenSpec change playlists-table-and-toggle Phase 1 of 3 (F-026a → F-026 → F-026b). Tasks.md initially said db/migrations/ but project uses single db/schema.sql + live DDL via Neon MCP (per F-016/F-017 precedent) — adapted. Spec text initially listed display_name + is_liked on the response shape; corrected on 2026-05-17 to match the existing API contract (spotify_name + client-side is_liked derivation). Live Neon DDL CHECKPOINT before PR1 deploy.",
       "correction_cycles": 0,
       "scope_expansions": [],
       "approaches_tried": [],
       "failure_reason": null,
-      "discovered_via": "operator handheld trick after F-024 shipped: short rematch query consistently retrieves rows that full-title search misses (long featured-artist suffixes, parenthetical version markers)"
+      "discovered_via": "openspec/changes/playlists-table-and-toggle (SPA UI-PHASE-13 rework needs per-row enable/disable + recency)"
+    },
+    {
+      "id": "F-026",
+      "spec": "docs/specs/F-026-playlists-toggle.md",
+      "test_spec": "docs/specs/T-026-playlists-toggle.md",
+      "description": "PATCH /api/playlists/:spotify_playlist_id endpoint. Body {enabled: boolean}. Refuses enabled=false on __liked__ with 409 liked_cannot_be_disabled. Idempotent on same-value writes. Standard 401/404/400 surface.",
+      "priority": 13,
+      "status": "pending",
+      "scope": [
+        "src/routes/playlists.ts",
+        "src/db/playlist_configs.ts",
+        "src/index.ts",
+        "tests/routes/playlists.test.ts",
+        "docs/specs/F-026-playlists-toggle.md",
+        "docs/specs/T-026-playlists-toggle.md"
+      ],
+      "depends_on": [
+        "F-026a"
+      ],
+      "assigned_to": null,
+      "test_file": null,
+      "coverage": null,
+      "notes": "OpenSpec change playlists-table-and-toggle Phase 2 of 3. Defense-in-depth __liked__ refusal (design D5: SPA disables the toggle visually but a direct curl/iOS path would otherwise bypass). 409 (not 400) because the request is well-formed — same pattern as POST /sync/run returning 409.",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [],
+      "failure_reason": null,
+      "discovered_via": "openspec/changes/playlists-table-and-toggle"
+    },
+    {
+      "id": "F-026b",
+      "spec": "docs/specs/F-026b-orchestrator-enabled-filter.md",
+      "test_spec": "docs/specs/T-026b-orchestrator-enabled-filter.md",
+      "description": "Orchestrator skips disabled playlists + records last_synced_at per row. WHERE enabled=TRUE filter on the orchestrator's iteration query (separate from GET /api/playlists which shows all rows). Calls existing markSynced helper after each successful per-playlist write.",
+      "priority": 12,
+      "status": "pending",
+      "scope": [
+        "src/sync/orchestrator.ts",
+        "src/db/playlist_configs.ts",
+        "tests/sync/orchestrator.test.ts",
+        "docs/specs/F-026b-orchestrator-enabled-filter.md",
+        "docs/specs/T-026b-orchestrator-enabled-filter.md"
+      ],
+      "depends_on": [
+        "F-026a"
+      ],
+      "assigned_to": null,
+      "test_file": null,
+      "coverage": null,
+      "notes": "OpenSpec change playlists-table-and-toggle Phase 3 of 3. Tasks.md said src/orchestrator/ and tests/orchestrator/ — actual paths are src/sync/orchestrator.ts + tests/sync/orchestrator.test.ts. Adapted. markSynced helper already exists in src/db/playlist_configs.ts (shipped with F-018); F-026b just wires it into the orchestrator's per-playlist write loop. listPlaylistConfigs needs splitting: listPlaylistConfigs (all rows, for GET handler) + listEnabledPlaylistConfigs (filtered, for orchestrator) to satisfy both GET response (show disabled) and orchestrator skip behavior.",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [],
+      "failure_reason": null,
+      "discovered_via": "openspec/changes/playlists-table-and-toggle"
     }
   ]
 }
