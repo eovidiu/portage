@@ -50,6 +50,8 @@ vi.mock("../../src/sync/playlist-config-seeder", () => ({
 
 vi.mock("../../src/db/playlist_configs", () => ({
   listPlaylistConfigs: vi.fn(),
+  listEnabledPlaylistConfigs: vi.fn(),
+  markSynced: vi.fn(),
 }));
 
 vi.mock("../../src/providers/spotify/playlists", () => ({
@@ -65,7 +67,11 @@ import { matchByIsrc } from "../../src/match/isrc";
 import { matchByFuzzy } from "../../src/match/fuzzy";
 import { writePlaylist } from "../../src/sync/playlist-writer";
 import { seedPlaylistConfigs } from "../../src/sync/playlist-config-seeder";
-import { listPlaylistConfigs } from "../../src/db/playlist_configs";
+import {
+  listPlaylistConfigs,
+  listEnabledPlaylistConfigs,
+  markSynced,
+} from "../../src/db/playlist_configs";
 import { fetchPlaylistTracks } from "../../src/providers/spotify/playlists";
 
 const PoolCtor = Pool as unknown as ReturnType<typeof vi.fn>;
@@ -79,6 +85,8 @@ const mockMatchByFuzzy = vi.mocked(matchByFuzzy);
 const mockWritePlaylist = vi.mocked(writePlaylist);
 const mockSeedPlaylistConfigs = vi.mocked(seedPlaylistConfigs);
 const mockListPlaylistConfigs = vi.mocked(listPlaylistConfigs);
+const mockListEnabledPlaylistConfigs = vi.mocked(listEnabledPlaylistConfigs);
+const mockMarkSynced = vi.mocked(markSynced);
 const mockFetchPlaylistTracks = vi.mocked(fetchPlaylistTracks);
 
 function makeEnv(): Env {
@@ -148,9 +156,18 @@ function setupProviders(overrides: {
   mockInsertRun.mockResolvedValue({ run_id: "run-001" });
   mockUpdateRun.mockResolvedValue(undefined);
   mockSeedPlaylistConfigs.mockResolvedValue(undefined);
-  mockListPlaylistConfigs.mockResolvedValue(
-    overrides.playlistConfigs ?? DEFAULT_CONFIGS,
+  // F-026b: the orchestrator iterates via listEnabledPlaylistConfigs now.
+  // listPlaylistConfigs (the all-rows variant) is still mocked so any
+  // future call site picks up a sane default; the GET handler is tested
+  // separately in tests/routes/playlists.test.ts. Test fixtures that
+  // omit `enabled` are treated as enabled (forward-compat with older
+  // T-009-* fixtures predating F-026a).
+  const configs = overrides.playlistConfigs ?? DEFAULT_CONFIGS;
+  mockListEnabledPlaylistConfigs.mockResolvedValue(
+    configs.filter((c) => c.enabled !== false),
   );
+  mockListPlaylistConfigs.mockResolvedValue(configs);
+  mockMarkSynced.mockResolvedValue(undefined);
   mockFetchLikedSongs.mockResolvedValue({
     pagesProcessed: 1,
     tracksInserted: overrides.tracksInserted ?? 5,
@@ -506,9 +523,14 @@ describe("T-009-11: Wall-time cap reflected in run status", () => {
     mockMarkAbandoned.mockResolvedValue(0);
     mockInsertRun.mockResolvedValue({ run_id: "run-timeout" });
     mockUpdateRun.mockResolvedValue(undefined);
-    // F-016b: seed + list needed before fetchLikedSongs is reached
+    // F-016b: seed + list needed before fetchLikedSongs is reached.
+    // F-026b: orchestrator uses listEnabledPlaylistConfigs (the SQL-level
+    // WHERE enabled = TRUE variant). Both mocks set so any future caller
+    // sees a sane default.
     mockSeedPlaylistConfigs.mockResolvedValue(undefined);
     mockListPlaylistConfigs.mockResolvedValue(DEFAULT_CONFIGS);
+    mockListEnabledPlaylistConfigs.mockResolvedValue(DEFAULT_CONFIGS);
+    mockMarkSynced.mockResolvedValue(undefined);
     // fetchLikedSongs never resolves (simulates long-running fetch)
     mockFetchLikedSongs.mockImplementation(
       () => new Promise<never>(() => { /* intentionally hangs */ }),
@@ -1330,6 +1352,178 @@ describe("T-023-05: insertRun failure — no row to update, lock still released"
     // Lock still released
     expect(mockClient.release).toHaveBeenCalled();
     expect(mockPool.end).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T-026b: orchestrator skips disabled playlists + records last_synced_at
+// ---------------------------------------------------------------------------
+describe("T-026b-01: disabled rows are skipped by listEnabledPlaylistConfigs", () => {
+  it("only enabled rows reach the iteration; disabled row never enters the write loop", async () => {
+    const configs = [
+      {
+        spotify_playlist_id: "__liked__",
+        spotify_name: "Spotify Liked",
+        tidal_playlist_id: "t-liked",
+        created_at: "2026-05-01T00:00:00Z",
+        last_synced_at: null,
+        enabled: true,
+      },
+      {
+        spotify_playlist_id: "extra-on",
+        spotify_name: "Workout",
+        tidal_playlist_id: "t-on",
+        created_at: "2026-05-02T00:00:00Z",
+        last_synced_at: null,
+        enabled: true,
+      },
+      {
+        spotify_playlist_id: "extra-off",
+        spotify_name: "Paused Mix",
+        tidal_playlist_id: "t-off",
+        created_at: "2026-05-03T00:00:00Z",
+        last_synced_at: "2026-05-01T00:00:00Z",
+        enabled: false,
+      },
+    ];
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+      .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] });
+    mockSql
+      .mockResolvedValueOnce([]) // __liked__ membership upsert
+      .mockResolvedValueOnce([]); // fetchPendingMatchQueue
+    setupProviders({ playlistConfigs: configs });
+
+    await runSync(makeEnv());
+
+    // writePlaylist invoked for __liked__ + extra-on, NOT extra-off
+    expect(mockWritePlaylist).toHaveBeenCalledWith(
+      expect.anything(), "__liked__", "t-liked",
+    );
+    expect(mockWritePlaylist).toHaveBeenCalledWith(
+      expect.anything(), "extra-on", "t-on",
+    );
+    expect(mockWritePlaylist).not.toHaveBeenCalledWith(
+      expect.anything(), "extra-off", expect.anything(),
+    );
+    // markSynced fired only for the enabled rows
+    expect(mockMarkSynced).toHaveBeenCalledWith(
+      expect.anything(), "__liked__", expect.any(String),
+    );
+    expect(mockMarkSynced).toHaveBeenCalledWith(
+      expect.anything(), "extra-on", expect.any(String),
+    );
+    expect(mockMarkSynced).not.toHaveBeenCalledWith(
+      expect.anything(), "extra-off", expect.any(String),
+    );
+  });
+});
+
+describe("T-026b-02: re-enable resumes from the next run (mock-level)", () => {
+  it("a previously disabled row that is now enabled participates exactly like a never-disabled row", async () => {
+    const configs = [
+      {
+        spotify_playlist_id: "__liked__",
+        spotify_name: "Spotify Liked",
+        tidal_playlist_id: "t-liked",
+        created_at: "2026-05-01T00:00:00Z",
+        last_synced_at: null,
+        enabled: true,
+      },
+      {
+        spotify_playlist_id: "extra-resumed",
+        spotify_name: "Resumed Mix",
+        tidal_playlist_id: "t-resumed",
+        created_at: "2026-05-02T00:00:00Z",
+        last_synced_at: "2026-04-20T00:00:00Z",
+        enabled: true, // freshly re-enabled by the operator
+      },
+    ];
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+      .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] });
+    mockSql
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    setupProviders({ playlistConfigs: configs });
+
+    await runSync(makeEnv());
+
+    expect(mockWritePlaylist).toHaveBeenCalledWith(
+      expect.anything(), "extra-resumed", "t-resumed",
+    );
+    expect(mockMarkSynced).toHaveBeenCalledWith(
+      expect.anything(), "extra-resumed", expect.any(String),
+    );
+  });
+});
+
+describe("T-026b-03: successful per-playlist sync writes last_synced_at", () => {
+  it("calls markSynced with an ISO-8601 UTC timestamp after writePlaylist succeeds", async () => {
+    setupSqlSuccess();
+    setupProviders();
+
+    await runSync(makeEnv());
+
+    expect(mockMarkSynced).toHaveBeenCalledWith(
+      expect.anything(),
+      "__liked__",
+      expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/),
+    );
+  });
+});
+
+describe("T-026b-04: per-playlist error preserves prior last_synced_at", () => {
+  it("does NOT call markSynced for the row whose writePlaylist throws", async () => {
+    const configs = [
+      {
+        spotify_playlist_id: "__liked__",
+        spotify_name: "Spotify Liked",
+        tidal_playlist_id: "t-liked",
+        created_at: "2026-05-01T00:00:00Z",
+        last_synced_at: null,
+        enabled: true,
+      },
+      {
+        spotify_playlist_id: "extra-broken",
+        spotify_name: "Broken Mix",
+        tidal_playlist_id: "t-broken",
+        created_at: "2026-05-02T00:00:00Z",
+        last_synced_at: "2026-04-01T00:00:00Z",
+        enabled: true,
+      },
+    ];
+    mockClient.query
+      .mockResolvedValueOnce({ rows: [{ acquired: true }] })
+      .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] });
+    mockSql
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    setupProviders({ playlistConfigs: configs });
+
+    // writePlaylist succeeds for Liked, throws for extra-broken
+    mockWritePlaylist.mockImplementation(async (_env, spotifyId) => {
+      if (spotifyId === "extra-broken") {
+        throw new Error("tidal_upstream: 502");
+      }
+      return {
+        playlistId: "tidal-resolved",
+        added: 0,
+        skippedDuplicates: 0,
+        invalidIds: [],
+        errors: [],
+      };
+    });
+
+    await runSync(makeEnv());
+
+    // markSynced fires only for the Liked row, not for the broken one
+    expect(mockMarkSynced).toHaveBeenCalledWith(
+      expect.anything(), "__liked__", expect.any(String),
+    );
+    expect(mockMarkSynced).not.toHaveBeenCalledWith(
+      expect.anything(), "extra-broken", expect.any(String),
+    );
   });
 });
 
