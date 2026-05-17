@@ -86,3 +86,23 @@ export async function markSynced(
     [spotifyPlaylistId, syncedAt],
   );
 }
+
+// F-026: per-row enable/disable. Returns the updated row, or null when no
+// playlist matches the id. The orchestrator skips `enabled = false` rows
+// without touching `playlist_membership`.
+export async function setEnabled(
+  sql: NeonQueryFunction<false, false>,
+  spotifyPlaylistId: string,
+  enabled: boolean,
+): Promise<PlaylistConfigRow | null> {
+  const rows = await sql(
+    `UPDATE playlist_configs
+        SET enabled = $2
+      WHERE spotify_playlist_id = $1
+  RETURNING spotify_playlist_id, spotify_name, tidal_playlist_id,
+            created_at, last_synced_at, enabled`,
+    [spotifyPlaylistId, enabled],
+  );
+  const arr = rows as unknown as PlaylistConfigRow[];
+  return arr.length > 0 ? arr[0] : null;
+}

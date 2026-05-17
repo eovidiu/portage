@@ -4,6 +4,7 @@ import type { Env } from "../env";
 import {
   getPlaylistConfig,
   listPlaylistConfigs,
+  setEnabled,
   upsertPlaylistConfig,
   type PlaylistConfigRow,
 } from "../db/playlist_configs";
@@ -82,6 +83,45 @@ app.post("/playlists", async (c) => {
     enabled: true,
   };
   return c.json(inserted, 201);
+});
+
+// F-026 — PATCH /api/playlists/:spotify_playlist_id
+// Toggles the `enabled` flag per row. The orchestrator's `WHERE enabled = TRUE`
+// filter (F-026b) skips disabled rows without removing them or their
+// playlist_membership data, so re-enabling resumes on the next scheduled run.
+// Disabling `__liked__` is refused (409) — Liked sync is the product's core
+// and a curl/iOS path could otherwise bypass the SPA's UI guard.
+app.patch("/playlists/:spotify_playlist_id", async (c) => {
+  const id = c.req.param("spotify_playlist_id");
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "invalid_request_body" }, 400);
+  }
+
+  if (
+    !body ||
+    typeof body !== "object" ||
+    !("enabled" in body) ||
+    typeof (body as { enabled?: unknown }).enabled !== "boolean"
+  ) {
+    return c.json({ error: "invalid_request_body" }, 400);
+  }
+
+  const enabled = (body as { enabled: boolean }).enabled;
+
+  if (id === LIKED_KEY && enabled === false) {
+    return c.json({ error: "liked_cannot_be_disabled" }, 409);
+  }
+
+  const sql = neon(c.env.DATABASE_URL);
+  const updated = await setEnabled(sql, id, enabled);
+  if (!updated) {
+    return c.json({ error: "playlist_not_found" }, 404);
+  }
+  return c.json(updated, 200);
 });
 
 export default app;

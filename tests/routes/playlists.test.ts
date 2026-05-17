@@ -15,12 +15,14 @@ vi.mock("@neondatabase/serverless", () => ({
 import {
   listPlaylistConfigs,
   getPlaylistConfig,
+  setEnabled,
   upsertPlaylistConfig,
 } from "../../src/db/playlist_configs";
 import { fetchSpotifyPlaylistName } from "../../src/providers/spotify/playlists";
 
 const mockListPlaylistConfigs = vi.mocked(listPlaylistConfigs);
 const mockGetPlaylistConfig = vi.mocked(getPlaylistConfig);
+const mockSetEnabled = vi.mocked(setEnabled);
 const mockUpsertPlaylistConfig = vi.mocked(upsertPlaylistConfig);
 const mockFetchSpotifyPlaylistName = vi.mocked(fetchSpotifyPlaylistName);
 
@@ -350,5 +352,166 @@ describe("POST /api/playlists — unauthenticated (T-022-05)", () => {
     });
     expect(res.status).toBe(401);
     expect(mockGetPlaylistConfig).not.toHaveBeenCalled();
+  });
+});
+
+// ============ T-026: PATCH /api/playlists/:id (toggle enabled) ============
+
+const DISABLED_EXTRA: PlaylistConfigRow = {
+  ...EXTRA_ROW,
+  enabled: false,
+};
+
+describe("PATCH /api/playlists/:id — disable success (T-026-01)", () => {
+  it("returns 200 with the updated row when disabling an enabled non-liked playlist", async () => {
+    mockSetEnabled.mockResolvedValue(DISABLED_EXTRA);
+
+    const res = await doFetch(`/api/playlists/${VALID_PLAYLIST_ID}`, {
+      method: "PATCH",
+      body: { enabled: false },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PlaylistConfigRow;
+    expect(body.spotify_playlist_id).toBe(VALID_PLAYLIST_ID);
+    expect(body.enabled).toBe(false);
+    expect(mockSetEnabled).toHaveBeenCalledWith(expect.anything(), VALID_PLAYLIST_ID, false);
+  });
+});
+
+describe("PATCH /api/playlists/:id — re-enable success (T-026-02)", () => {
+  it("returns 200 with the updated row when re-enabling a disabled playlist", async () => {
+    mockSetEnabled.mockResolvedValue({ ...EXTRA_ROW, enabled: true });
+
+    const res = await doFetch(`/api/playlists/${VALID_PLAYLIST_ID}`, {
+      method: "PATCH",
+      body: { enabled: true },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PlaylistConfigRow;
+    expect(body.enabled).toBe(true);
+    expect(mockSetEnabled).toHaveBeenCalledWith(expect.anything(), VALID_PLAYLIST_ID, true);
+  });
+});
+
+describe("PATCH /api/playlists/:id — idempotent same value (T-026-03)", () => {
+  it("returns 200 with the unchanged row when toggling to the same value", async () => {
+    mockSetEnabled.mockResolvedValue(EXTRA_ROW);
+
+    const res = await doFetch(`/api/playlists/${VALID_PLAYLIST_ID}`, {
+      method: "PATCH",
+      body: { enabled: true },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PlaylistConfigRow;
+    expect(body.enabled).toBe(true);
+  });
+});
+
+describe("PATCH /api/playlists/:id — unknown playlist id (T-026-04)", () => {
+  it("returns 404 playlist_not_found when no row matches the id", async () => {
+    mockSetEnabled.mockResolvedValue(null);
+
+    const res = await doFetch(`/api/playlists/nonexistent22charabcd`, {
+      method: "PATCH",
+      body: { enabled: false },
+    });
+
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ error: "playlist_not_found" });
+  });
+});
+
+describe("PATCH /api/playlists/:id — malformed body (T-026-05)", () => {
+  it("returns 400 invalid_request_body when body is missing enabled", async () => {
+    const res = await doFetch(`/api/playlists/${VALID_PLAYLIST_ID}`, {
+      method: "PATCH",
+      body: {},
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ error: "invalid_request_body" });
+    expect(mockSetEnabled).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when enabled is not a boolean", async () => {
+    const res = await doFetch(`/api/playlists/${VALID_PLAYLIST_ID}`, {
+      method: "PATCH",
+      body: { enabled: "yes" },
+    });
+    expect(res.status).toBe(400);
+    expect(mockSetEnabled).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when body is not parseable JSON", async () => {
+    const { default: playlistsRoute } = await import("../../src/routes/playlists");
+    const { jwtMiddleware } = await import("../../src/middleware/auth");
+    const env = makeEnv();
+    const app = new Hono<{ Bindings: Env }>();
+    app.use("*", jwtMiddleware([]));
+    app.route("/api", playlistsRoute);
+
+    const token = await mintBearer(env.JWT_SECRET);
+    const ctx = createExecutionContext();
+    const req = new Request(`https://worker.test/api/playlists/${VALID_PLAYLIST_ID}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: "not-json{",
+    });
+    const res = await app.fetch(req, env, ctx);
+    await waitOnExecutionContext(ctx);
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ error: "invalid_request_body" });
+  });
+});
+
+describe("PATCH /api/playlists/:id — unauthenticated (T-026-06)", () => {
+  it("returns 401 when no Authorization header", async () => {
+    const res = await doFetch(`/api/playlists/${VALID_PLAYLIST_ID}`, {
+      method: "PATCH",
+      body: { enabled: false },
+      authed: false,
+    });
+    expect(res.status).toBe(401);
+    expect(mockSetEnabled).not.toHaveBeenCalled();
+  });
+});
+
+describe("PATCH /api/playlists/__liked__ — disable refused (T-026-07)", () => {
+  it("returns 409 liked_cannot_be_disabled and does NOT touch the DB", async () => {
+    const res = await doFetch(`/api/playlists/__liked__`, {
+      method: "PATCH",
+      body: { enabled: false },
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ error: "liked_cannot_be_disabled" });
+    expect(mockSetEnabled).not.toHaveBeenCalled();
+  });
+});
+
+describe("PATCH /api/playlists/__liked__ — idempotent enable (T-026-08)", () => {
+  it("returns 200 and writes through when enabling Liked Songs (no-op semantically)", async () => {
+    mockSetEnabled.mockResolvedValue(LIKED_ROW);
+
+    const res = await doFetch(`/api/playlists/__liked__`, {
+      method: "PATCH",
+      body: { enabled: true },
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PlaylistConfigRow;
+    expect(body.spotify_playlist_id).toBe("__liked__");
+    expect(body.enabled).toBe(true);
+    expect(mockSetEnabled).toHaveBeenCalledWith(expect.anything(), "__liked__", true);
   });
 });
