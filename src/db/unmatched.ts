@@ -4,26 +4,31 @@ import type { Env } from "../env";
 export interface UnmatchedRow {
   spotify_id: string;
   reason: string;
+  // F-027: optional. When passed, the orchestrator's runId is recorded
+  // on the row so the SPA can drill into a specific run's unmatched set.
+  // Manual `/unmatched/:id/skip` writes (no run context) omit it.
+  sync_run_id?: string | null;
 }
 
 /**
  * Upsert an unmatched row. On conflict, increments attempts and updates
- * last_attempt_at and reason — but only when status is still 'pending'.
- * A previously matched/skipped row stays untouched.
+ * last_attempt_at, reason, and sync_run_id — but only when status is
+ * still 'pending'. A previously matched/skipped row stays untouched.
  */
 export async function upsertUnmatched(
   sql: NeonQueryFunction<false, false>,
   row: UnmatchedRow,
 ): Promise<void> {
   await sql(
-    `INSERT INTO unmatched (spotify_id, reason, attempts, last_attempt_at, status)
-     VALUES ($1, $2, 1, now(), 'pending')
+    `INSERT INTO unmatched (spotify_id, reason, attempts, last_attempt_at, status, sync_run_id)
+     VALUES ($1, $2, 1, now(), 'pending', $3)
      ON CONFLICT (spotify_id) DO UPDATE
        SET attempts        = unmatched.attempts + 1,
            last_attempt_at = now(),
-           reason          = EXCLUDED.reason
+           reason          = EXCLUDED.reason,
+           sync_run_id     = EXCLUDED.sync_run_id
      WHERE unmatched.status = 'pending'`,
-    [row.spotify_id, row.reason],
+    [row.spotify_id, row.reason, row.sync_run_id ?? null],
   );
 }
 
