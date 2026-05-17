@@ -79,6 +79,7 @@ app.post("/playlists", async (c) => {
     tidal_playlist_id: null,
     created_at: new Date().toISOString(),
     last_synced_at: null,
+    enabled: true,
   };
   return c.json(inserted, 201);
 });

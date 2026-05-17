@@ -239,3 +239,50 @@ Suggested Sprint 7 team structure:
   - F-013 M4: R9 orphan ISRC UNION — orphans bypass ISRC stage; fix is UNION in fetchNewTracks
   - M7: HTTP route logging swallows — orchestrator route ergonomics
 - **Harness debt** (carry over from S12): schema-drift hook regex quirk (Stage 4) — needs SQL string vs JS identifier disambiguation. Plus Edit-tool stale-state issue noted above.
+
+## Session 14 - F-023 silent-abandon fix (2026-05-13/14)
+- Mode: single-session Opus. No handoff written at session end — reconstructed from commits f3d638a (feat) + 89e836b (harness flip).
+- F-023 shipped: `runSync()` top-level `catch (err)` updates sync_runs row with `status='failed', error_code='orchestrator_fatal', errors=1, error_details=[{spotify_id:'unknown', error_code:'orchestrator_fatal', message}]`. Nested try/catch defends against `updateRun` itself throwing. F-009 spec amended (R24 + R25 + R14 closed-set extended). 5 new T-023 tests. Discovery: direct Neon query showed 7 of 8 failed runs in prior 14d were silent abandons (status=running for 12h, all counters zero, no error_code).
+- Tests at exit: 633 (per Active Context note from this session).
+- features.json: F-023 added, total_features 26→27, passing 26→27. discovered_via='production-observability'.
+- **Deploy decision recorded but unresolved**: Active Context originally read "NOT deployed yet — operator decision: wait for next cron + tail to capture an actual orchestrator_fatal in production, vs deploy now." No follow-up commit clarifies the resolution.
+
+## Session 15 - portage-ui pen-test + M-1 + a11y + CF_ACCESS [vars] wiring (~2026-05-14/15)
+- Mode: unknown (no handoff). Reconstructed from commits 054c6de + 5763bea + 6247b97.
+- Pen-test report: `docs/security/2026-05-12-portage-ui-pen-test.md` (215+38 lines added across two commits).
+- M-1 fix (054c6de): require `Content-Type: application/json` on body-less POSTs (POST /sync/run, POST /unmatched/:id/skip, POST /unmatched/:id/match). 4 new tests. 628 Worker tests pass at exit.
+- Sign-off table on the pen-test report: H-1 ✅ (CF Access topology), M-1 ✅, I-5 ✅, WCAG ✅ pending re-audit. L-1 + I-1..I-4 deferred to future Worker work. WCAG 2.2 AA audit surfaced 14 issues (2 Critical, 5 High, 5 Medium, 2 Low); 8 remediated in portage-ui repo this session (commit 5763bea logs the remediation).
+- F-019 wiring (6247b97): `CF_ACCESS_TEAM` and `CF_ACCESS_AUD` moved into `wrangler.toml [vars]` (operator action that was queued at S13 exit). Implies a `wrangler deploy` happened around this time but no commit captures the Version ID.
+
+## Session 16 - F-024 + F-025 + GET /unmatched total count (2026-05-15)
+- Mode: unknown (no handoff). Reconstructed from commits 9b4b381 + 5372e92 + 8927fd8 + c1b63ec + e7113fc.
+- F-024 (5372e92, harness 8927fd8): manual Tidal catalog search proxy — GET /unmatched/:spotify_id/search. Helper `searchTidalCandidates` extracted from fuzzy.ts into `src/match/tidal-search.ts` so both fuzzy (F-007) and the new manual route share one URL composition + 429 retry path (design D2 in openspec/changes/f-024-tidal-catalog-search/). 73 new tests across validators (23) / rate-limit (7) / helper (15) / mapper (8) / route (20). Full suite 678 → 708.
+- GET /unmatched enhancement (c1b63ec): response now includes total pending count alongside the page slice.
+- F-025 (e7113fc, PR #16 squash-merged): rematch heuristic — GET /unmatched/rematch (sweep, default limit=10, max 25) + GET /unmatched/:spotify_id/rematch (single-row). Pure helper `buildRematchQuery(artist, title) = firstTwoArtistWords + " " + firstTitleWord` in src/match/rematch.ts. Reuses F-024's searchTidalCandidates + rate-limit bucket. Read-only contract — selection still flows through POST /:spotify_id/match. 16 helper + 22 route tests; full suite 725 → 747.
+- features.json on close: F-024 flipped to passing in session; F-025 left as `in-progress` (audit session 17 flipped it).
+- openspec/changes/f-024-tidal-catalog-search/ + /f-025-rematch-heuristic/ remain in active changes directory (not archived).
+
+## Session 17 - Audit + harness sync (2026-05-16)
+- Mode: single-session Opus. Triggered by Ovidiu: "do an analysis and review what's implemented what remains to be done and update the harness and context".
+- **Findings**:
+  - features.json out of sync: F-025 marked `in-progress` despite PR #16 having shipped; header `passing` was 27 but actual passing-feature count was 28; header `total_features` was 28 but actual feature count was 29.
+  - context_summary.md Active Context first bullet still said "F-023 NOT deployed yet" — stale by ~3 days.
+  - claude-progress.txt had no entries for S14/S15/S16 despite 3 feature lines shipping + a pen-test + a deploy-implying [vars] wiring.
+- **Changes applied** (this session, read-only on production code):
+  - features.json: F-025 flipped to passing with test_file/coverage/approaches_tried populated. `total_features` 28 → 29, `passing` 27 → 29. jq audit confirms header matches actual counts.
+  - context_summary.md: Active Context rewritten to reflect F-023/F-024/F-025/security/CF_ACCESS state. Production test count updated 589 → 747. Untracked-tooling bullet rewritten with a decision prompt. ## Meta-Session 2026-05-16 entry appended with audit findings. ## Meta-Patterns appended (audit 2026-05-16) — two patterns on skipped handoffs and features.json counter discipline.
+  - claude-progress.txt: S14/S15/S16 reconstructed retrospectively from commits; this S17 entry written.
+- **Open items the audit could not resolve**:
+  - **Production deploy state of F-023/F-024/F-025**: no commit captures `wrangler deploy` since 2026-05-09 Version 1d157357. Operator action: `wrangler deployments list` and update Active Context with the current Version ID + which features are live.
+  - **F-024 + F-025 openspec changes**: still under `openspec/changes/`, not archived. Run `/opsx:archive f-024-tidal-catalog-search` and `/opsx:archive f-025-rematch-heuristic` after confirming deploy.
+  - **Untracked tooling** (`.claude/commands/opsx/`, `.claude/skills/openspec-*/`, `openspec/changes/portage-ui-foundation/`, `openspec/config.yaml`): operator call. The portage-ui-foundation change is effectively shipped (Worker side); candidate for `/opsx:archive portage-ui-foundation` or commit-as-historical-record.
+  - **Cross-repo state**: portage-ui SPA is in a separate repo per S13's plan. Cannot inspect from this session (project-root-bound). Run `/harness-continue` from `portage-ui/` to learn its state.
+- Tests: did not run full suite (audit was read-only on code). Smoke gate green (`./.harness/init.sh smoke_test`).
+
+## Next Session — operator confirmations, then choose between deploy-and-archive vs new feature work
+1. **Confirm production deploy state**: `wrangler deployments list` and `curl https://portage.eovidiu.co.uk/healthz`. If F-023/F-024/F-025 are not live, run `npx wrangler deploy` and record the new Version ID in `context_summary.md` Active Context.
+2. **Archive openspec changes that have shipped**: F-024, F-025, and (optionally) portage-ui-foundation. Pattern: `/opsx:archive <change-name>`.
+3. **Decide untracked tooling fate**: commit, gitignore, or leave alone. Be explicit so future sessions stop surfacing the same noise.
+4. **Sprint 7 minor follow-ups** (carry-over, unchanged since S12 — none block anything): F-012 M1 candidates fetch returns [], F-012 M2/M3 fuzzy filter, F-013 M4 orphan ISRC UNION, M7 route logging swallows.
+5. **Harness debt** (carry-over, unchanged since S12): schema-drift hook regex quirk (SQL string vs JS identifier disambiguation).
+6. **Cross-repo**: confirm portage-ui SPA state via a separate session rooted in that repo.

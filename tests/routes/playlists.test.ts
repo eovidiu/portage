@@ -90,6 +90,7 @@ const LIKED_ROW: PlaylistConfigRow = {
   tidal_playlist_id: "f10ce98a-e3b8-4bc4-96ca-d38ab88ca3c5",
   created_at: "2026-05-09T00:00:00Z",
   last_synced_at: "2026-05-09T07:23:00Z",
+  enabled: true,
 };
 
 const EXTRA_ROW: PlaylistConfigRow = {
@@ -98,6 +99,7 @@ const EXTRA_ROW: PlaylistConfigRow = {
   tidal_playlist_id: null,
   created_at: "2026-05-09T08:00:00Z",
   last_synced_at: null,
+  enabled: true,
 };
 
 // ============ T-021: GET /api/playlists ============
@@ -158,6 +160,69 @@ describe("GET /api/playlists — unauthenticated (T-021-03)", () => {
     const res = await doFetch("/api/playlists", { authed: false });
     expect(res.status).toBe(401);
     expect(mockListPlaylistConfigs).not.toHaveBeenCalled();
+  });
+});
+
+// ============ T-026a: enabled + last_synced_at projection ============
+
+describe("GET /api/playlists — includes enabled and last_synced_at fields (T-026a-06)", () => {
+  it("returns enabled: true on default rows and enabled: false on a disabled row", async () => {
+    const disabled: PlaylistConfigRow = { ...EXTRA_ROW, enabled: false };
+    mockListPlaylistConfigs.mockResolvedValue([LIKED_ROW, disabled]);
+    const res = await doFetch("/api/playlists");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PlaylistConfigRow[];
+    expect(body).toHaveLength(2);
+    expect(body[0]?.enabled).toBe(true);
+    expect(body[1]?.enabled).toBe(false);
+  });
+
+  it("preserves an ISO last_synced_at on a synced row and null on an unsynced row", async () => {
+    const unsynced: PlaylistConfigRow = { ...EXTRA_ROW, last_synced_at: null };
+    const synced: PlaylistConfigRow = { ...LIKED_ROW, last_synced_at: "2026-05-16T18:00:00Z" };
+    mockListPlaylistConfigs.mockResolvedValue([synced, unsynced]);
+    const res = await doFetch("/api/playlists");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PlaylistConfigRow[];
+    expect(body[0]?.last_synced_at).toBe("2026-05-16T18:00:00Z");
+    expect(body[1]?.last_synced_at).toBeNull();
+  });
+});
+
+describe("GET /api/playlists — disabled rows still appear (T-026a-07)", () => {
+  it("does not filter out enabled: false rows from the GET response", async () => {
+    const enabledRow: PlaylistConfigRow = { ...EXTRA_ROW, enabled: true };
+    const disabledA: PlaylistConfigRow = {
+      ...EXTRA_ROW,
+      spotify_playlist_id: "DDDDDDDDDDDDDDDDDDDDDD",
+      enabled: false,
+    };
+    const disabledB: PlaylistConfigRow = {
+      ...EXTRA_ROW,
+      spotify_playlist_id: "EEEEEEEEEEEEEEEEEEEEEE",
+      enabled: false,
+    };
+    mockListPlaylistConfigs.mockResolvedValue([LIKED_ROW, enabledRow, disabledA, disabledB]);
+    const res = await doFetch("/api/playlists");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as PlaylistConfigRow[];
+    expect(body).toHaveLength(4);
+    expect(body.filter((r) => !r.enabled)).toHaveLength(2);
+  });
+});
+
+describe("POST /api/playlists — synthetic row reflects enabled: true (T-026a-09)", () => {
+  it("returns enabled: true on the synthetic 201 response after insert", async () => {
+    mockGetPlaylistConfig.mockResolvedValueOnce(null);
+    mockFetchSpotifyPlaylistName.mockResolvedValue("Today's Top Hits");
+    mockUpsertPlaylistConfig.mockResolvedValue(undefined);
+    const res = await doFetch("/api/playlists", {
+      method: "POST",
+      body: { spotify_playlist_id: VALID_PLAYLIST_ID },
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as PlaylistConfigRow;
+    expect(body.enabled).toBe(true);
   });
 });
 
