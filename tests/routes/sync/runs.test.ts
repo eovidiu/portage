@@ -316,3 +316,57 @@ describe("T-027: defaults", () => {
     );
   });
 });
+
+// ============ T-027a: candidates surface on unmatched rows ============
+
+describe("T-027a-03: unmatched row with persisted candidates surfaces them", () => {
+  it("response carries the candidates array verbatim", async () => {
+    const candidates = [
+      { tidal_id: "1", title: "Yesterday A", artist: "Wrong A", album: null, score: 0.84 },
+      { tidal_id: "2", title: "Yesterday B", artist: "Wrong B", album: null, score: 0.81 },
+      { tidal_id: "3", title: "Yesterday C", artist: "Wrong C", album: null, score: 0.74 },
+    ];
+    const unmatchedWithCandidates: RunTrackRow = {
+      ...(UNMATCHED_ROW as Extract<RunTrackRow, { status: "unmatched" }>),
+      reason: "fuzzy_below_threshold",
+      candidates,
+    };
+    mockRunExists.mockResolvedValueOnce(true);
+    mockListRunTracks.mockResolvedValueOnce({ total: 1, items: [unmatchedWithCandidates] });
+
+    const res = await doFetch(`/sync/runs/${VALID_RUN_ID}/tracks`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: Array<Record<string, unknown>> };
+    expect(body.items[0]).toMatchObject({
+      status: "unmatched",
+      reason: "fuzzy_below_threshold",
+      candidates,
+    });
+  });
+});
+
+describe("T-027a-04: unmatched row without persisted candidates omits the key", () => {
+  it("response row carries no candidates field (key absent)", async () => {
+    mockRunExists.mockResolvedValueOnce(true);
+    mockListRunTracks.mockResolvedValueOnce({ total: 1, items: [UNMATCHED_ROW] });
+
+    const res = await doFetch(`/sync/runs/${VALID_RUN_ID}/tracks`);
+    const body = (await res.json()) as { items: Array<Record<string, unknown>> };
+    expect("candidates" in body.items[0]).toBe(false);
+  });
+});
+
+describe("T-027a-05: matched rows never carry candidates", () => {
+  it("matched rows in the response omit the candidates key", async () => {
+    mockRunExists.mockResolvedValueOnce(true);
+    mockListRunTracks.mockResolvedValueOnce({
+      total: 2,
+      items: [MATCHED_ROW, UNMATCHED_ROW],
+    });
+
+    const res = await doFetch(`/sync/runs/${VALID_RUN_ID}/tracks`);
+    const body = (await res.json()) as { items: Array<Record<string, unknown>> };
+    const matched = body.items.find((r) => r.status === "matched")!;
+    expect("candidates" in matched).toBe(false);
+  });
+});
