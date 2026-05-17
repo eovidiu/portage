@@ -1,8 +1,8 @@
 {
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
-  "total_features": 33,
-  "passing": 33,
+  "total_features": 34,
+  "passing": 34,
   "features": [
     {
       "id": "F014",
@@ -1050,6 +1050,43 @@
       ],
       "failure_reason": null,
       "discovered_via": "openspec/changes/per-run-track-detail (SPA UI-PHASE-14 needed the per-run manifest)"
+    },
+    {
+      "id": "F-027a",
+      "spec": "docs/specs/F-027a-fuzzy-candidates-replay.md",
+      "test_spec": "docs/specs/T-027a-fuzzy-candidates-replay.md",
+      "description": "Persist top-3 ranked Tidal candidates on fuzzy_below_threshold rejection (unmatched.candidates JSONB). Surface them in GET /sync/runs/:id/tracks. Extend POST /unmatched/:id/match with optional sync_run_id so manual picks from a run-detail page belong to that run.",
+      "priority": 12,
+      "status": "passing",
+      "scope": [
+        "db/schema.sql",
+        "src/db/unmatched.ts",
+        "src/db/sync_runs.ts",
+        "src/match/fuzzy.ts",
+        "src/routes/unmatched.ts",
+        "tests/db/unmatched.test.ts",
+        "tests/match/fuzzy.test.ts",
+        "tests/routes/sync/runs.test.ts",
+        "tests/routes/unmatched.test.ts"
+      ],
+      "depends_on": [
+        "F-027"
+      ],
+      "assigned_to": null,
+      "test_file": "tests/match/fuzzy.test.ts; tests/routes/sync/runs.test.ts; tests/routes/unmatched.test.ts",
+      "coverage": "784 tests passing (was 776, +8 new T-027a scenarios). Covers orchestrator persistence (top-3 on fuzzy_below_threshold / NULL on no_candidates), GET projection (with / without / matched-never), and POST sync_run_id paths (NULL / valid UUID / malformed ignored).",
+      "notes": "Shipped via PR #24 (commit 1d8b89c on main). Live Neon DDL applied: ALTER TABLE unmatched ADD COLUMN candidates JSONB. JSONB column stays NULL on rows that predate this change (documented in schema + spec). UI side UI-PHASE-15 shipped in portage-ui PR #13.",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [
+        "JSONB column on unmatched rather than a separate match_candidates table \u2014 read with the row, no joins, no FK cascade. The shape is read-as-blob, never aggregated.",
+        "Optional sync_run_id on the existing POST /unmatched/:id/match (backwards-compatible) rather than a new endpoint. Malformed UUIDs are silently treated as NULL \u2014 the legacy /unmatched flow stays unchanged when callers pass nothing.",
+        "Cast confidence::float8 already in place from F-027 hot-fix; candidates JSONB needs no cast \u2014 Neon driver decodes JSONB into a JS array natively.",
+        "Test for the fuzzy.ts persistence asserts shape + sort order on the JSONB serialization; the no_candidates branch test asserts the param is null. Two clear contracts.",
+        "POST sync_run_id validation: UUID regex pre-check on the body; not part of Zod schema because the field is optional and the legacy flow predates schema validation."
+      ],
+      "failure_reason": null,
+      "discovered_via": "screenshot 2026-05-17 of the run-detail page showing six consecutive fuzzy_below_threshold rows with no recovery path"
     }
   ]
 }
