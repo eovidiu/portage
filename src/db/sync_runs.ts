@@ -175,6 +175,171 @@ export async function getLatestSucceededAt(env: Env): Promise<string | null> {
   return row.finished_at;
 }
 
+// ----- F-027: per-run track manifest helpers --------------------------------
+
+export interface RunTrackMatchedRow {
+  spotify_id: string;
+  title: string;
+  artist: string;
+  album: string | null;
+  isrc: string | null;
+  status: "matched";
+  tidal_id: string;
+  method: "isrc" | "fuzzy" | "manual";
+  confidence: number | null;
+}
+
+export interface RunTrackUnmatchedRow {
+  spotify_id: string;
+  title: string;
+  artist: string;
+  album: string | null;
+  isrc: string | null;
+  status: "unmatched";
+  reason: string;
+}
+
+export type RunTrackRow = RunTrackMatchedRow | RunTrackUnmatchedRow;
+
+export interface RunTracksFilters {
+  status?: "matched" | "unmatched" | "all";
+  method?: "isrc" | "fuzzy" | "manual";
+  limit: number;
+  offset: number;
+}
+
+export interface RunTracksResult {
+  total: number;
+  items: RunTrackRow[];
+}
+
+// F-027: returns true if a sync_runs row exists for run_id. Used by the
+// route handler to distinguish "run with zero tracks" (200 OK + empty items)
+// from "unknown run" (404).
+export async function runExists(env: Env, runId: string): Promise<boolean> {
+  const sql = neon(env.DATABASE_URL);
+  const rows = await sql(
+    `SELECT 1 FROM sync_runs WHERE run_id = $1`,
+    [runId],
+  );
+  return (rows as unknown[]).length > 0;
+}
+
+// F-027: returns the per-run track manifest. Matched rows come from
+// tracks ⋈ matches; unmatched rows come from tracks ⋈ unmatched. Both
+// halves are filtered by sync_run_id. `status` narrows which half(s) are
+// included. `method` narrows the matched half only. Pagination at the
+// UNION level so total reflects the filter-honored count, not the limit.
+export async function listRunTracks(
+  env: Env,
+  runId: string,
+  filters: RunTracksFilters,
+): Promise<RunTracksResult> {
+  const sql = neon(env.DATABASE_URL);
+  const status = filters.status ?? "all";
+  const includeMatched = status === "matched" || status === "all";
+  const includeUnmatched = status === "unmatched" || status === "all";
+
+  // The matched/unmatched halves are stitched with UNION ALL inside a CTE
+  // so we can ORDER BY + paginate the combined result deterministically.
+  // Method filter applies only to the matched half (ignored when status=
+  // unmatched per the spec).
+  const methodClause = filters.method
+    ? `AND m.method = '${filters.method}'`
+    : "";
+
+  const matchedSelect = `
+    SELECT
+      t.spotify_id, t.title, t.artist, t.album, t.isrc,
+      'matched'::text AS status,
+      m.tidal_id, m.method, m.confidence,
+      NULL::text AS reason
+    FROM matches m
+    JOIN tracks t ON t.spotify_id = m.spotify_id
+    WHERE m.sync_run_id = $1
+    ${methodClause}
+  `;
+
+  const unmatchedSelect = `
+    SELECT
+      t.spotify_id, t.title, t.artist, t.album, t.isrc,
+      'unmatched'::text AS status,
+      NULL::text AS tidal_id,
+      NULL::text AS method,
+      NULL::numeric AS confidence,
+      u.reason
+    FROM unmatched u
+    JOIN tracks t ON t.spotify_id = u.spotify_id
+    WHERE u.sync_run_id = $1
+  `;
+
+  let union: string;
+  if (includeMatched && includeUnmatched) {
+    union = `(${matchedSelect}) UNION ALL (${unmatchedSelect})`;
+  } else if (includeMatched) {
+    union = matchedSelect;
+  } else {
+    // unmatched only — method filter ignored
+    union = unmatchedSelect;
+  }
+
+  // Two queries: paginated rows + filter-honored total count.
+  const itemsRows = await sql(
+    `SELECT * FROM (${union}) sub
+       ORDER BY spotify_id
+       LIMIT $2 OFFSET $3`,
+    [runId, filters.limit, filters.offset],
+  );
+
+  const countRows = await sql(
+    `SELECT COUNT(*)::int AS total FROM (${union}) sub`,
+    [runId],
+  );
+
+  const total = (countRows[0] as { total: number }).total;
+
+  // The DB returns matched rows with reason=null and unmatched rows with
+  // tidal_id/method/confidence=null. Project into the discriminated-union
+  // shape so the API response carries only the relevant fields per row.
+  const items: RunTrackRow[] = (itemsRows as Array<{
+    spotify_id: string;
+    title: string;
+    artist: string;
+    album: string | null;
+    isrc: string | null;
+    status: "matched" | "unmatched";
+    tidal_id: string | null;
+    method: "isrc" | "fuzzy" | "manual" | null;
+    confidence: number | null;
+    reason: string | null;
+  }>).map((row) => {
+    if (row.status === "matched") {
+      return {
+        spotify_id: row.spotify_id,
+        title: row.title,
+        artist: row.artist,
+        album: row.album,
+        isrc: row.isrc,
+        status: "matched",
+        tidal_id: row.tidal_id as string,
+        method: row.method as "isrc" | "fuzzy" | "manual",
+        confidence: row.confidence,
+      };
+    }
+    return {
+      spotify_id: row.spotify_id,
+      title: row.title,
+      artist: row.artist,
+      album: row.album,
+      isrc: row.isrc,
+      status: "unmatched",
+      reason: row.reason as string,
+    };
+  });
+
+  return { total, items };
+}
+
 export async function getRecentRuns(
   env: Env,
   limit: number,
