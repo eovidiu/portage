@@ -80,8 +80,14 @@ CREATE TABLE IF NOT EXISTS unmatched (
     reason          TEXT NOT NULL,
     attempts        INT NOT NULL DEFAULT 0,
     last_attempt_at TIMESTAMPTZ,
-    status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','matched','skipped'))
+    status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','matched','skipped')),
+    -- F-027: the run during which this row was (re-)written. NULL means
+    -- the row predates the F-027 schema add — those rows aren't part of
+    -- any specific run's manifest. The orchestrator passes the current
+    -- runId on every upsert from F-027 onward.
+    sync_run_id     UUID REFERENCES sync_runs(run_id)
 );
+CREATE INDEX IF NOT EXISTS idx_unmatched_sync_run_id ON unmatched(sync_run_id);
 
 -- iOS capture events — optional geo + context for a track.
 CREATE TABLE IF NOT EXISTS captures (

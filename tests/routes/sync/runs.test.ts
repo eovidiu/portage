@@ -5,9 +5,40 @@ import type { Env } from "../../../src/env";
 
 vi.mock("../../../src/db/sync_runs");
 
-import { getRecentRuns } from "../../../src/db/sync_runs";
+import {
+  getRecentRuns,
+  listRunTracks,
+  runExists,
+  type RunTrackRow,
+} from "../../../src/db/sync_runs";
 
 const mockGetRecentRuns = vi.mocked(getRecentRuns);
+const mockListRunTracks = vi.mocked(listRunTracks);
+const mockRunExists = vi.mocked(runExists);
+
+const VALID_RUN_ID = "8e2f39ae-d1f2-4009-abc4-0738284b2ea9";
+
+const MATCHED_ROW: RunTrackRow = {
+  spotify_id: "0123456789abcdefghijkl",
+  title: "Watermelon Sugar",
+  artist: "Harry Styles",
+  album: "Fine Line",
+  isrc: "USSM12000001",
+  status: "matched",
+  tidal_id: "12345678",
+  method: "isrc",
+  confidence: 1.0,
+};
+
+const UNMATCHED_ROW: RunTrackRow = {
+  spotify_id: "abcdefghij0123456789kl",
+  title: "Some Track",
+  artist: "Some Artist",
+  album: null,
+  isrc: null,
+  status: "unmatched",
+  reason: "no_candidates",
+};
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
@@ -127,5 +158,161 @@ describe("T-011: GET /sync/runs — non-numeric limit falls back to default", ()
     const res = await doFetch("/sync/runs?limit=abc");
     expect(res.status).toBe(200);
     expect(mockGetRecentRuns).toHaveBeenCalledWith(expect.anything(), 20);
+  });
+});
+
+// ============ T-027: GET /sync/runs/:run_id/tracks ============
+
+describe("T-027-01: run with only matched tracks", () => {
+  it("returns 200 with every row carrying status=matched + tidal_id/method/confidence", async () => {
+    mockRunExists.mockResolvedValueOnce(true);
+    mockListRunTracks.mockResolvedValueOnce({
+      total: 2,
+      items: [MATCHED_ROW, { ...MATCHED_ROW, spotify_id: "second" }],
+    });
+
+    const res = await doFetch(`/sync/runs/${VALID_RUN_ID}/tracks`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { total: number; items: RunTrackRow[] };
+    expect(body.total).toBe(2);
+    expect(body.items).toHaveLength(2);
+    expect(body.items.every((r) => r.status === "matched")).toBe(true);
+  });
+});
+
+describe("T-027-02: run with mixed matched + unmatched", () => {
+  it("returns both row types distinguished by the status field", async () => {
+    mockRunExists.mockResolvedValueOnce(true);
+    mockListRunTracks.mockResolvedValueOnce({
+      total: 2,
+      items: [MATCHED_ROW, UNMATCHED_ROW],
+    });
+
+    const res = await doFetch(`/sync/runs/${VALID_RUN_ID}/tracks`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: RunTrackRow[] };
+
+    const matched = body.items.find((r) => r.status === "matched");
+    const unmatched = body.items.find((r) => r.status === "unmatched");
+    expect(matched).toBeDefined();
+    expect(unmatched).toBeDefined();
+    expect("tidal_id" in matched!).toBe(true);
+    expect("reason" in unmatched!).toBe(true);
+  });
+});
+
+describe("T-027-03: status filter narrows the response", () => {
+  it("forwards status=unmatched to the helper", async () => {
+    mockRunExists.mockResolvedValueOnce(true);
+    mockListRunTracks.mockResolvedValueOnce({ total: 1, items: [UNMATCHED_ROW] });
+
+    const res = await doFetch(`/sync/runs/${VALID_RUN_ID}/tracks?status=unmatched`);
+    expect(res.status).toBe(200);
+    expect(mockListRunTracks).toHaveBeenCalledWith(
+      expect.anything(),
+      VALID_RUN_ID,
+      expect.objectContaining({ status: "unmatched" }),
+    );
+  });
+});
+
+describe("T-027-04: method filter narrows matched rows", () => {
+  it("forwards method=fuzzy to the helper", async () => {
+    mockRunExists.mockResolvedValueOnce(true);
+    mockListRunTracks.mockResolvedValueOnce({ total: 0, items: [] });
+
+    await doFetch(`/sync/runs/${VALID_RUN_ID}/tracks?status=matched&method=fuzzy`);
+    expect(mockListRunTracks).toHaveBeenCalledWith(
+      expect.anything(),
+      VALID_RUN_ID,
+      expect.objectContaining({ status: "matched", method: "fuzzy" }),
+    );
+  });
+});
+
+describe("T-027-05: pagination", () => {
+  it("forwards limit + offset to the helper", async () => {
+    mockRunExists.mockResolvedValueOnce(true);
+    mockListRunTracks.mockResolvedValueOnce({ total: 100, items: [] });
+
+    await doFetch(`/sync/runs/${VALID_RUN_ID}/tracks?limit=20&offset=20`);
+    expect(mockListRunTracks).toHaveBeenCalledWith(
+      expect.anything(),
+      VALID_RUN_ID,
+      expect.objectContaining({ limit: 20, offset: 20 }),
+    );
+  });
+});
+
+describe("T-027-06: limit ceiling", () => {
+  it("clamps limit=500 to 200", async () => {
+    mockRunExists.mockResolvedValueOnce(true);
+    mockListRunTracks.mockResolvedValueOnce({ total: 0, items: [] });
+
+    await doFetch(`/sync/runs/${VALID_RUN_ID}/tracks?limit=500`);
+    expect(mockListRunTracks).toHaveBeenCalledWith(
+      expect.anything(),
+      VALID_RUN_ID,
+      expect.objectContaining({ limit: 200 }),
+    );
+  });
+});
+
+describe("T-027-07: unknown run id", () => {
+  it("returns 404 run_not_found when sync_runs has no matching row", async () => {
+    mockRunExists.mockResolvedValueOnce(false);
+
+    const res = await doFetch(`/sync/runs/${VALID_RUN_ID}/tracks`);
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ error: "run_not_found" });
+    expect(mockListRunTracks).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 immediately without DB lookup when run_id is not a UUID", async () => {
+    const res = await doFetch(`/sync/runs/not-a-uuid/tracks`);
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body).toEqual({ error: "run_not_found" });
+    expect(mockRunExists).not.toHaveBeenCalled();
+    expect(mockListRunTracks).not.toHaveBeenCalled();
+  });
+});
+
+describe("T-027-08: run with zero tracks", () => {
+  it("returns 200 with {total: 0, items: []} — distinct from 404", async () => {
+    mockRunExists.mockResolvedValueOnce(true);
+    mockListRunTracks.mockResolvedValueOnce({ total: 0, items: [] });
+
+    const res = await doFetch(`/sync/runs/${VALID_RUN_ID}/tracks`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { total: number; items: unknown[] };
+    expect(body).toEqual({ total: 0, items: [] });
+  });
+});
+
+describe("T-027: defaults", () => {
+  it("defaults to status=all, limit=50, offset=0 when no params", async () => {
+    mockRunExists.mockResolvedValueOnce(true);
+    mockListRunTracks.mockResolvedValueOnce({ total: 0, items: [] });
+
+    await doFetch(`/sync/runs/${VALID_RUN_ID}/tracks`);
+    expect(mockListRunTracks).toHaveBeenCalledWith(
+      expect.anything(),
+      VALID_RUN_ID,
+      expect.objectContaining({ status: "all", limit: 50, offset: 0, method: undefined }),
+    );
+  });
+
+  it("ignores unknown status values and falls back to all", async () => {
+    mockRunExists.mockResolvedValueOnce(true);
+    mockListRunTracks.mockResolvedValueOnce({ total: 0, items: [] });
+
+    await doFetch(`/sync/runs/${VALID_RUN_ID}/tracks?status=bogus`);
+    expect(mockListRunTracks).toHaveBeenCalledWith(
+      expect.anything(),
+      VALID_RUN_ID,
+      expect.objectContaining({ status: "all" }),
+    );
   });
 });

@@ -165,7 +165,11 @@ export async function matchByFuzzy(
           decision: "no_candidates",
         }),
       );
-      await upsertUnmatched(sql, { spotify_id: track.spotify_id, reason: "no_candidates" });
+      await upsertUnmatched(sql, {
+        spotify_id: track.spotify_id,
+        reason: "no_candidates",
+        sync_run_id: syncRunId,
+      });
       unmatched++;
       continue;
     }
@@ -208,6 +212,7 @@ export async function matchByFuzzy(
       await upsertUnmatched(sql, {
         spotify_id: track.spotify_id,
         reason: "fuzzy_below_threshold",
+        sync_run_id: syncRunId,
       });
       unmatched++;
     }
