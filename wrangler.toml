@@ -21,6 +21,16 @@ TIDAL_PLAYLIST_TITLE = "Spotify Liked"
 SPOTIFY_REDIRECT_URI = "https://portage.eovidiu.co.uk/auth/spotify/callback"
 TIDAL_REDIRECT_URI = "https://portage.eovidiu.co.uk/auth/tidal/callback"
 
+# Per-invocation match-queue caps. Defaults in src/sync/orchestrator.ts are 5
+# each (DEFAULT_MATCH_BATCH_ISRC / DEFAULT_MATCH_BATCH_FUZZY). Reduced to 2
+# to stay well inside the Workers free-tier CPU + subrequest budget; without
+# this clamp ~36% of crons over the prior 14d window were silent-abandoned
+# (CF terminated the isolate before runSync's catch could record an error
+# code, so the row sat at status='running' until markAbandonedRuns swept it
+# 12 h later). The queue drains more slowly, but every run completes.
+MATCH_BATCH_ISRC = "2"
+MATCH_BATCH_FUZZY = "2"
+
 
 # F-019: Cloudflare Access JWT validation. Both values are public — TEAM is
 # visible in the CF Access redirect URL, AUD is part of every CF Access JWT's
