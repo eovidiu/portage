@@ -1,7 +1,7 @@
 {
   "project": "spotify-roon-sync",
   "created": "2026-04-25",
-  "total_features": 34,
+  "total_features": 35,
   "passing": 34,
   "features": [
     {
@@ -1087,6 +1087,36 @@
       ],
       "failure_reason": null,
       "discovered_via": "screenshot 2026-05-17 of the run-detail page showing six consecutive fuzzy_below_threshold rows with no recovery path"
+    },
+    {
+      "id": "F-028",
+      "spec": "openspec/changes/flexible-fuzzy-matching/specs/fuzzy-matching/spec.md",
+      "test_spec": null,
+      "description": "Flexible fuzzy matching algorithm — swap title comparison from tokenSortRatio to tokenSetRatio (robust to qualifier-suffix asymmetry like '- 2014 Remastered'), widen STRIP_PATTERNS for common qualifier suffixes (Single Edit, Original, Live, Bonus Track, Recorded at …, year-Remastered variants), share normaliseText between title and artist for smart-quote + en/em-dash parity, add ISRC-prefix tiebreaker (+0.05 boost when first 7 chars match), and lower ACCEPT_THRESHOLD from 0.85 to 0.80.",
+      "priority": 8,
+      "status": "in-progress",
+      "scope": [
+        "src/match/title.ts",
+        "src/match/artist.ts",
+        "src/match/score.ts",
+        "src/match/fuzzy.ts",
+        "tests/match/title.test.ts",
+        "tests/match/artist.test.ts",
+        "tests/match/score.test.ts",
+        "tests/match/fuzzy.test.ts",
+        "tests/match/f-028-flexible-matching.test.ts",
+        "openspec/changes/flexible-fuzzy-matching/"
+      ],
+      "depends_on": ["F-007", "F-027a"],
+      "assigned_to": null,
+      "test_file": "tests/match/f-028-flexible-matching.test.ts",
+      "coverage": null,
+      "notes": "Algorithm-only change — no schema, no API contract, no UI. Output shape ScoreBreakdown gains additive isrcPrefixBoost field; FuzzyMatchResult unchanged. Threshold drop from 0.85 → 0.80 is a single tunable constant in src/match/fuzzy.ts; revert in one line if false-positive rate exceeds 10% in the first 48h post-deploy. Sister observability change: fuzzy_decision log line gains title_score_method + isrc_prefix_boost fields so operator can audit decisions via wrangler tail.",
+      "correction_cycles": 0,
+      "scope_expansions": [],
+      "approaches_tried": [],
+      "failure_reason": null,
+      "discovered_via": "operator manual-match corpus (30 hand-matched tracks in last 14d) + 24 currently-pending fuzzy_below_threshold rows on 2026-05-22 sampling showed a small recurring set of failure patterns (qualifier-suffix asymmetry, smart-quote mismatches, parenthetical subtitles) that the matcher should have handled"
     }
   ]
 }

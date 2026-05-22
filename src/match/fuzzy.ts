@@ -17,7 +17,11 @@ import type { Env } from "../env";
  * 2026-05-02-style compound-include incident from repeating.
  */
 
-const ACCEPT_THRESHOLD = 0.85;
+// F-028 D6: lowered from 0.85 → 0.80 to absorb the residual gap after the
+// tokenSetRatio + widened-STRIP + ISRC-prefix changes. Single tunable knob;
+// revert to 0.85 in one line if false-positive rate exceeds the
+// rollback threshold in design.md.
+const ACCEPT_THRESHOLD = 0.80;
 const TIE_EPSILON = 0.001;
 const MAX_CANDIDATES = 5;
 
@@ -27,12 +31,16 @@ interface SpotifyTrackRow {
   artist: string;
   album: string | null;
   duration_ms: number | null;
+  // F-028 D5: ISRC threaded through so scoreCandidate can apply the
+  // prefix tiebreaker. Nullable — many rows still have no ISRC.
+  isrc: string | null;
 }
 
 interface ScoredCandidate {
   candidate: ResolvedTidalCandidate;
   score: number;
   durationDelta: number;
+  isrcPrefixBoost: number;
 }
 
 export interface FuzzyMatchResult {
@@ -54,6 +62,9 @@ function rankCandidates(
         candidate: c,
         score: breakdown.total,
         durationDelta: Math.abs(tdMs - spMs),
+        // F-028: surface the ISRC boost so the per-track log line below
+        // can record it without re-computing the breakdown.
+        isrcPrefixBoost: breakdown.isrcPrefixBoost,
       };
     })
     .sort((a, b) => {
@@ -71,7 +82,7 @@ async function fetchUnmatchedTracks(
   limit: number,
 ): Promise<SpotifyTrackRow[]> {
   const rows = await sql(
-    `SELECT t.spotify_id, t.title, t.artist, t.album, t.duration_ms
+    `SELECT t.spotify_id, t.title, t.artist, t.album, t.duration_ms, t.isrc
      FROM tracks t
      LEFT JOIN matches m ON t.spotify_id = m.spotify_id
      LEFT JOIN unmatched u ON t.spotify_id = u.spotify_id
@@ -163,6 +174,9 @@ export async function matchByFuzzy(
           top_score: null,
           second_best_score: null,
           decision: "no_candidates",
+          // F-028 D7: log-shape parity across all decision branches.
+          title_score_method: "token_set",
+          isrc_prefix_boost: 0.0,
         }),
       );
       await upsertUnmatched(sql, {
@@ -187,6 +201,9 @@ export async function matchByFuzzy(
           top_score: top.score,
           second_best_score: secondScore,
           decision: "accepted",
+          // F-028 D7: title primitive + ISRC boost provenance.
+          title_score_method: "token_set",
+          isrc_prefix_boost: top.isrcPrefixBoost,
         }),
       );
       const confidence = Math.round(top.score * 100) / 100;
@@ -207,6 +224,9 @@ export async function matchByFuzzy(
           top_score: top.score,
           second_best_score: secondScore,
           decision: "rejected_below_threshold",
+          // F-028 D7: log-shape parity — rejected rows surface the same fields.
+          title_score_method: "token_set",
+          isrc_prefix_boost: top.isrcPrefixBoost,
         }),
       );
       // F-027a: persist the top 3 ranked candidates alongside the row so
