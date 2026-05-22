@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  # gitleaks-action lists PR commits to scope its diff scan.
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: typecheck / test / audit / secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        # npm install (not npm ci) for parity with portage-ui — the lockfile
+        # is missing Linux-only optional deps for native modules.
+        run: npm install --no-audit --no-fund
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (Workers isolate via @cloudflare/vitest-pool-workers)
+        # Skip `test:coverage` deliberately — istanbul coverage is structurally
+        # broken under @cloudflare/vitest-pool-workers (every src/ file reports
+        # 0% even when fully exercised). Documented in .harness/context_summary.md.
+        run: npm test
+
+      - name: npm audit (production deps, fail on high+)
+        run: npm audit --audit-level=high --omit=dev
+
+      - name: Gitleaks (secret scan)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
