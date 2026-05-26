@@ -20,7 +20,7 @@ const mockListPending = vi.mocked(listPending);
 const mockGetCount = vi.mocked(getUnmatchedCountByEnv);
 const mockGetPending = vi.mocked(getPendingUnmatched);
 
-const PRINCIPAL_EMAIL = "eovidiu@gmail.com";
+const PRINCIPAL_EMAIL = "test@example.com";
 
 function makeEnv(): Env {
   return {

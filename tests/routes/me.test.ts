@@ -38,7 +38,7 @@ describe("GET /api/me — user principal (T-020-01)", () => {
     const app = new Hono<{ Bindings: Env }>();
     // Simulate cfAccessMiddleware having authenticated a browser user
     app.use("*", async (c, next) => {
-      c.set("principal" as never, { kind: "user", email: "eovidiu@gmail.com" });
+      c.set("principal" as never, { kind: "user", email: "test@example.com" });
       await next();
     });
     app.route("/api", meRoute);
@@ -50,7 +50,7 @@ describe("GET /api/me — user principal (T-020-01)", () => {
 
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body).toEqual({ email: "eovidiu@gmail.com", kind: "user" });
+    expect(body).toEqual({ email: "test@example.com", kind: "user" });
   });
 });
 

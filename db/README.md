@@ -37,7 +37,6 @@ postgresql://<role>:<password>@<host>/neondb?sslmode=require&channel_binding=req
 | `sync_runs` | Audit log of every sync engine execution |
 | `matches` | Confirmed Spotify→Tidal track pairings |
 | `unmatched` | Tracks pending manual review or retry |
-| `captures` | iOS-recorded capture events with optional geo context |
 | `sync_state` | Key/value runtime state (sync cursor, etc.) |
 
 ## Invariants

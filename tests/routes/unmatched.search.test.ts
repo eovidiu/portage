@@ -16,7 +16,7 @@ const mockTidalFetch = vi.mocked(tidalFetch);
 const mockTrackExists = vi.mocked(trackExists);
 
 const TIDAL_BEARER = "eyJSECRETjwtACCESStokenTHAT_must_never_leak";
-const PRINCIPAL_EMAIL = "eovidiu@gmail.com";
+const PRINCIPAL_EMAIL = "test@example.com";
 const SPOTIFY_ID = "3n3Ppam7vgaVa1iaRUc9Lp";
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
