@@ -62,7 +62,7 @@
 
 ## 10. Cross-repo contract sanity check
 
-- [x] 10.1 After both the portage and portage-ui proposals materialize, run the contract diff from plan §6: `diff <(grep -A20 '"candidates"' openspec/changes/f-024-tidal-catalog-search/specs/tidal-catalog-search/spec.md) <(grep -A20 '"candidates"' /Users/fameftimie/work/portage-ui/openspec/changes/portage-ui-foundation/specs/web-ui-tidal-search/spec.md)` and confirm the JSON shape blocks agree on field names, types, and the absence of `confidence`
+- [x] 10.1 After both the portage and portage-ui proposals materialize, run the contract diff from plan §6: `diff <(grep -A20 '"candidates"' openspec/changes/f-024-tidal-catalog-search/specs/tidal-catalog-search/spec.md) <(grep -A20 '"candidates"' <PORTAGE_REPO_ROOT>/../portage-ui/openspec/changes/portage-ui-foundation/specs/web-ui-tidal-search/spec.md)` and confirm the JSON shape blocks agree on field names, types, and the absence of `confidence`
 - [x] 10.2 If they diverge, update the lagging spec — do NOT change the contract without re-running the cross-repo agreement
 
 ## 11. Final harness check

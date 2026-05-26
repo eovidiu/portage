@@ -31,3 +31,10 @@ unmatched-review.md
 
 # Claude Code session-local state (cron mutex, transient runtime files)
 .claude/scheduled_tasks.lock
+
+# Local-dev tooling (not part of the public release)
+.harness/
+.claude/
+
+# User-specific wrangler config (template at wrangler.toml.example)
+wrangler.toml

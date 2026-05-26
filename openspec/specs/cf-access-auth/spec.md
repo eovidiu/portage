@@ -12,7 +12,7 @@ issuer (`iss` matches `https://<team>.cloudflareaccess.com`), and expiry.
 
 #### Scenario: Valid Cf-Access JWT with correct audience and operator email
 - **WHEN** a request includes a `Cf-Access-Jwt-Assertion` header signed by the
-  team JWKS, with `aud == CF_ACCESS_AUD` and `email == eovidiu@gmail.com`
+  team JWKS, with `aud == CF_ACCESS_AUD` and `email == OPERATOR_EMAIL`
 - **THEN** the middleware sets `c.var.principal = { kind: "user", email }`
   and the handler executes normally
 
@@ -25,7 +25,7 @@ issuer (`iss` matches `https://<team>.cloudflareaccess.com`), and expiry.
 
 #### Scenario: Cf-Access JWT with email that does not match the allow rule
 - **WHEN** a request includes a valid Cf-Access JWT but the `email` claim
-  is anything other than `eovidiu@gmail.com`
+  is anything other than the configured `OPERATOR_EMAIL`
 - **THEN** the middleware responds with `403 Forbidden` and the request does
   not reach the handler
 
@@ -72,12 +72,12 @@ network fetch.
 ### Requirement: CORS allows the SPA origin
 
 The Worker SHALL respond to CORS preflight requests by allowing the origins
-`https://app.portage.eovidiu.co.uk` and `http://localhost:5173`, the methods
+`https://<UI_ORIGIN>` and `http://localhost:5173`, the methods
 `GET`, `POST`, `OPTIONS`, and the headers `Authorization` and `Content-Type`,
 with `Access-Control-Allow-Credentials: true`.
 
 #### Scenario: SPA origin preflight
-- **WHEN** an `OPTIONS` request arrives with `Origin: https://app.portage.eovidiu.co.uk`
+- **WHEN** an `OPTIONS` request arrives with `Origin: https://<UI_ORIGIN>`
 - **THEN** the response is `204 No Content` with the matching
   `Access-Control-Allow-*` headers
 

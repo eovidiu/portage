@@ -33,7 +33,7 @@ function makeEnv(overrides: Partial<Record<string, string>> = {}): Record<string
   return {
     TIDAL_CLIENT_ID: "tidal-client-id",
     TIDAL_CLIENT_SECRET: "tidal-client-secret",
-    TIDAL_REDIRECT_URI: "https://portage.eovidiu.co.uk/auth/tidal/callback",
+    TIDAL_REDIRECT_URI: "https://example.com/auth/tidal/callback",
     TIDAL_COUNTRY_CODE: "RO",
     TIDAL_PLAYLIST_TITLE: "Spotify Liked",
     JWT_SECRET: "test-jwt-secret-32-bytes-long-ok!",
@@ -41,7 +41,7 @@ function makeEnv(overrides: Partial<Record<string, string>> = {}): Record<string
     DATABASE_URL: "postgresql://localhost/test",
     SPOTIFY_CLIENT_ID: "spotify-client-id",
     SPOTIFY_CLIENT_SECRET: "spotify-client-secret",
-    SPOTIFY_REDIRECT_URI: "https://portage.eovidiu.co.uk/auth/spotify/callback",
+    SPOTIFY_REDIRECT_URI: "https://example.com/auth/spotify/callback",
     ...overrides,
   };
 }
@@ -74,7 +74,7 @@ describe("initiateOAuth — redirect URL (T-003-01)", () => {
     const env = makeEnv();
     const url = await initiateOAuth(env as never);
     const params = new URL(url).searchParams;
-    expect(params.get("redirect_uri")).toBe("https://portage.eovidiu.co.uk/auth/tidal/callback");
+    expect(params.get("redirect_uri")).toBe("https://example.com/auth/tidal/callback");
   });
 
   it("includes all configured scope strings", async () => {

@@ -24,7 +24,7 @@ const VALID_B64_DEK = "dGVzdC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzLWxvbmc=";
 
 const CF_TEAM = "eovidiu";
 const CF_AUD = "test-aud-tag";
-const ALLOWED_EMAIL = "eovidiu@gmail.com";
+const ALLOWED_EMAIL = "test@example.com";
 
 let cfPublicKey: KeyLike;
 let cfPrivateKey: KeyLike;
@@ -61,10 +61,11 @@ function makeEnv(overrides: Partial<Record<string, string>> = {}): Record<string
     DATABASE_URL: env.DATABASE_URL ?? "postgresql://localhost/test",
     TIDAL_COUNTRY_CODE: "RO",
     TIDAL_PLAYLIST_TITLE: "Spotify Liked",
-    SPOTIFY_REDIRECT_URI: "https://portage.eovidiu.co.uk/auth/spotify/callback",
-    TIDAL_REDIRECT_URI: "https://portage.eovidiu.co.uk/auth/tidal/callback",
+    SPOTIFY_REDIRECT_URI: "https://example.com/auth/spotify/callback",
+    TIDAL_REDIRECT_URI: "https://example.com/auth/tidal/callback",
     CF_ACCESS_TEAM: CF_TEAM,
     CF_ACCESS_AUD: CF_AUD,
+    OPERATOR_EMAIL: ALLOWED_EMAIL,
     ...overrides,
   };
 }

@@ -80,7 +80,7 @@ Same — save securely, don't commit.
 ### Step 9: Set Worker secrets via wrangler
 
 ```
-cd /Users/fameftimie/work/portage
+cd <PORTAGE_REPO_ROOT>
 wrangler secret put JWT_SECRET                # paste Step 7 value
 wrangler secret put TOKEN_ENCRYPTION_KEY      # paste Step 8 value
 wrangler secret put SPOTIFY_CLIENT_ID         # from .env
@@ -111,7 +111,7 @@ Plus the non-secret env vars (in `wrangler.toml` `[vars]`): `SPOTIFY_REDIRECT_UR
 ### Step 12: Deploy the Worker
 
 ```
-cd /Users/fameftimie/work/portage
+cd <PORTAGE_REPO_ROOT>
 wrangler deploy
 ```
 
@@ -148,7 +148,7 @@ curl -s https://portage.eovidiu.co.uk/readyz  | jq
 ### Step 17: Mint bootstrap JWT
 
 ```
-cd /Users/fameftimie/work/portage
+cd <PORTAGE_REPO_ROOT>
 JWT_SECRET="<value from Step 7>" \
   npx tsx scripts/mint-bootstrap-token.ts
 ```
