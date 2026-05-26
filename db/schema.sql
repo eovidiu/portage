@@ -94,17 +94,6 @@ CREATE TABLE IF NOT EXISTS unmatched (
 );
 CREATE INDEX IF NOT EXISTS idx_unmatched_sync_run_id ON unmatched(sync_run_id);
 
--- iOS capture events — optional geo + context for a track.
-CREATE TABLE IF NOT EXISTS captures (
-    capture_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    spotify_id   TEXT REFERENCES tracks(spotify_id),
-    captured_at  TIMESTAMPTZ NOT NULL,
-    location_lat NUMERIC(9,6),
-    location_lng NUMERIC(9,6),
-    source       TEXT,
-    context_note TEXT
-);
-
 -- Key/value store for sync cursor and other runtime state.
 -- The 'cursor' key holds the spotify_added_at high-water mark (I-005).
 CREATE TABLE IF NOT EXISTS sync_state (
@@ -178,5 +167,3 @@ CREATE INDEX IF NOT EXISTS idx_sync_runs_started_at ON sync_runs(started_at DESC
 CREATE INDEX IF NOT EXISTS idx_matches_sync_run_id  ON matches(sync_run_id);
 CREATE INDEX IF NOT EXISTS idx_matches_tidal        ON matches(tidal_id);
 CREATE INDEX IF NOT EXISTS idx_unmatched_status     ON unmatched(status, attempts);
-CREATE INDEX IF NOT EXISTS idx_captures_captured_at ON captures(captured_at DESC);
-CREATE INDEX IF NOT EXISTS idx_captures_spotify_id  ON captures(spotify_id);
