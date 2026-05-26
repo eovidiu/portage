@@ -17,17 +17,17 @@ import playlistsRoute from "./routes/playlists";
 import { scheduled } from "./scheduled";
 
 const AUTH_SKIP_PATHS = ["/healthz", "/readyz", "/auth/spotify/callback", "/auth/tidal/callback"];
-const ALLOWED_UI_ORIGINS = new Set([
-  "https://app.portage.eovidiu.co.uk",
-  "http://localhost:5173",
-]);
+const LOCAL_DEV_UI_ORIGIN = "http://localhost:5173";
 
 const app = new Hono<{ Bindings: Env }>();
 
 app.use(
   "*",
   cors({
-    origin: (origin) => (ALLOWED_UI_ORIGINS.has(origin ?? "") ? origin : null),
+    origin: (origin, c) => {
+      const allowed = new Set([c.env.UI_ORIGIN, LOCAL_DEV_UI_ORIGIN].filter(Boolean));
+      return allowed.has(origin) ? origin : null;
+    },
     allowHeaders: ["Authorization", "Content-Type"],
     allowMethods: ["GET", "POST", "OPTIONS"],
     credentials: true,

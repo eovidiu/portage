@@ -13,6 +13,7 @@ TIDAL_REDIRECT_URI=PLACEHOLDER
 TIDAL_COUNTRY_CODE=PLACEHOLDER
 TIDAL_PLAYLIST_TITLE=PLACEHOLDER
 OPERATOR_EMAIL=your-email@example.com
+UI_ORIGIN=https://example.com
 # Test-only: overrides orchestrator 300s wall-time cap (used by T-009-10 e2e test).
 # Set to 1 to ensure the timeout fires before any provider call returns.
 WALL_TIME_OVERRIDE_MS=1

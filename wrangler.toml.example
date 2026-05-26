@@ -29,6 +29,7 @@ TIDAL_PLAYLIST_TITLE = "Spotify Liked"
 SPOTIFY_REDIRECT_URI = "https://<YOUR_WORKER_DOMAIN>/auth/spotify/callback"
 TIDAL_REDIRECT_URI = "https://<YOUR_WORKER_DOMAIN>/auth/tidal/callback"
 OPERATOR_EMAIL = "<YOUR_EMAIL>"
+UI_ORIGIN = "<YOUR_UI_ORIGIN>"
 
 # Per-invocation match-queue caps. Defaults in src/sync/orchestrator.ts are 5
 # each (DEFAULT_MATCH_BATCH_ISRC / DEFAULT_MATCH_BATCH_FUZZY). Reduced to 2

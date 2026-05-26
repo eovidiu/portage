@@ -25,6 +25,7 @@ const VALID_B64_DEK = "dGVzdC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzLWxvbmc=";
 const CF_TEAM = "eovidiu";
 const CF_AUD = "test-aud-tag";
 const ALLOWED_EMAIL = "test@example.com";
+const ALLOWED_UI_ORIGIN = "https://app.example.com";
 
 let cfPublicKey: KeyLike;
 let cfPrivateKey: KeyLike;
@@ -66,6 +67,7 @@ function makeEnv(overrides: Partial<Record<string, string>> = {}): Record<string
     CF_ACCESS_TEAM: CF_TEAM,
     CF_ACCESS_AUD: CF_AUD,
     OPERATOR_EMAIL: ALLOWED_EMAIL,
+    UI_ORIGIN: ALLOWED_UI_ORIGIN,
     ...overrides,
   };
 }
@@ -472,11 +474,11 @@ describe("cfAccessMiddleware — skip path (T-019-14)", () => {
 
 // ---- T-019-15: CORS preflight from allowed origin ----
 describe("CORS — allowed origin (T-019-15)", () => {
-  it("responds 204 to OPTIONS from https://app.portage.eovidiu.co.uk with Allow-* headers", async () => {
+  it("responds 204 to OPTIONS from the configured UI_ORIGIN with Allow-* headers", async () => {
     const res = await doFetch(
       "/sync/status",
       {
-        Origin: "https://app.portage.eovidiu.co.uk",
+        Origin: ALLOWED_UI_ORIGIN,
         "Access-Control-Request-Method": "GET",
         "Access-Control-Request-Headers": "Authorization, Content-Type",
       },
@@ -484,9 +486,7 @@ describe("CORS — allowed origin (T-019-15)", () => {
       "OPTIONS"
     );
     expect(res.status).toBe(204);
-    expect(res.headers.get("Access-Control-Allow-Origin")).toBe(
-      "https://app.portage.eovidiu.co.uk"
-    );
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ALLOWED_UI_ORIGIN);
     expect(res.headers.get("Access-Control-Allow-Credentials")).toBe("true");
     const allowMethods = res.headers.get("Access-Control-Allow-Methods") ?? "";
     expect(allowMethods).toContain("GET");

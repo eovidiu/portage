@@ -12,6 +12,8 @@ export interface Env {
   TIDAL_PLAYLIST_TITLE: string;
   /** Operator email allowed past the Cloudflare Access JWT gate. Single-tenant. (F-019) */
   OPERATOR_EMAIL: string;
+  /** UI origin allowed by the CORS middleware (e.g. https://app.portage.example.com). */
+  UI_ORIGIN: string;
   /** Test-only: overrides the 300 s wall-time cap. Absent in production. */
   WALL_TIME_OVERRIDE_MS?: string;
   /** Per-invocation Spotify Liked Songs page budget. Defaults to 1. (F-015) */
