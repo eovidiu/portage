@@ -28,7 +28,7 @@ Each feature is self-contained, implementable without clarification.
 | [F-010](F-010-scheduled-execution.md) | Scheduled execution |
 | [F-011](F-011-sync-logging.md) | Sync run logging and metrics |
 | [F-012](F-012-unmatched-queue.md) | Unmatched review queue |
-| [F-013](docs/specs/retired/F-013-captures-api.md) | Captures API (iOS-ready) [RETIRED 2026-05-26 — see docs/specs/retired/] |
+| [F-013](retired/F-013-captures-api.md) | Captures API (iOS-ready) [RETIRED 2026-05-26 — see `retired/`] |
 | [F-014](F-014-health-status.md) | Health and status endpoints |
 
 ### Test specifications
@@ -49,7 +49,7 @@ Each test validates one thing and returns either a boolean or a single numeric m
 | [T-010](T-010-scheduled-execution.md) | F-010 |
 | [T-011](T-011-sync-logging.md) | F-011 |
 | [T-012](T-012-unmatched-queue.md) | F-012 |
-| [T-013](docs/specs/retired/T-013-captures-api.md) | F-013 [RETIRED 2026-05-26 — see docs/specs/retired/] |
+| [T-013](retired/T-013-captures-api.md) | F-013 [RETIRED 2026-05-26 — see `retired/`] |
 | [T-014](T-014-health-status.md) | F-014 |
 
 ## Specification conventions
