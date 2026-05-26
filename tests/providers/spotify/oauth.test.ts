@@ -41,10 +41,10 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
     TOKEN_ENCRYPTION_KEY: "dGVzdC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzLWxvbmc=",
     SPOTIFY_CLIENT_ID: "test-spotify-client-id",
     SPOTIFY_CLIENT_SECRET: "SPSECRETCANARY",
-    SPOTIFY_REDIRECT_URI: "https://portage.eovidiu.co.uk/auth/spotify/callback",
+    SPOTIFY_REDIRECT_URI: "https://example.com/auth/spotify/callback",
     TIDAL_CLIENT_ID: "tidal-client-id",
     TIDAL_CLIENT_SECRET: "tidal-client-secret",
-    TIDAL_REDIRECT_URI: "https://portage.eovidiu.co.uk/auth/tidal/callback",
+    TIDAL_REDIRECT_URI: "https://example.com/auth/tidal/callback",
     TIDAL_COUNTRY_CODE: "RO",
     TIDAL_PLAYLIST_TITLE: "Spotify Liked",
     ...overrides,
@@ -129,7 +129,7 @@ describe("initiateSpotifyOAuth — authorize URL (T-002-01)", () => {
     expect(result.authorizeUrl).toMatch(/^https:\/\/accounts\.spotify\.com\/authorize\?/);
     const url = new URL(result.authorizeUrl);
     expect(url.searchParams.get("client_id")).toBe("test-spotify-client-id");
-    expect(url.searchParams.get("redirect_uri")).toBe("https://portage.eovidiu.co.uk/auth/spotify/callback");
+    expect(url.searchParams.get("redirect_uri")).toBe("https://example.com/auth/spotify/callback");
     expect(url.searchParams.get("scope")).toBe("user-library-read");
     expect(url.searchParams.get("response_type")).toBe("code");
     expect(url.searchParams.get("state")).toBeTruthy();

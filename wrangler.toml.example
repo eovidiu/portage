@@ -1,12 +1,20 @@
+# Copy this file to wrangler.toml and fill in your values.
+# wrangler.toml is gitignored — it holds your personal Cloudflare
+# account binding and is never committed.
+
 name = "portage"
 main = "src/index.ts"
 # Pinned to local-runtime max; production accepts later dates. Bump after wrangler upgrade.
 compatibility_date = "2024-12-30"
 compatibility_flags = ["nodejs_compat"]
-account_id = "dc223a5a0db5a99a0ba194aff0c98c58"
+account_id = "<YOUR_CLOUDFLARE_ACCOUNT_ID>"
 
+# Bind the Worker to your custom domain. Replace <YOUR_WORKER_DOMAIN> with the
+# hostname you've configured in Cloudflare (e.g. portage.example.com). The
+# domain must already exist in your Cloudflare account; `custom_domain = true`
+# tells wrangler to provision the DNS record + SSL automatically.
 routes = [
-  { pattern = "portage.eovidiu.co.uk", custom_domain = true }
+  { pattern = "<YOUR_WORKER_DOMAIN>", custom_domain = true }
 ]
 
 # Steady-state mode (2x daily UTC) per F-010. Backfill drained 2026-05-04 ~09:30 UTC
@@ -18,8 +26,9 @@ crons = ["23 7 * * *", "23 19 * * *"]
 [vars]
 TIDAL_COUNTRY_CODE = "RO"
 TIDAL_PLAYLIST_TITLE = "Spotify Liked"
-SPOTIFY_REDIRECT_URI = "https://portage.eovidiu.co.uk/auth/spotify/callback"
-TIDAL_REDIRECT_URI = "https://portage.eovidiu.co.uk/auth/tidal/callback"
+SPOTIFY_REDIRECT_URI = "https://<YOUR_WORKER_DOMAIN>/auth/spotify/callback"
+TIDAL_REDIRECT_URI = "https://<YOUR_WORKER_DOMAIN>/auth/tidal/callback"
+OPERATOR_EMAIL = "<YOUR_EMAIL>"
 
 # Per-invocation match-queue caps. Defaults in src/sync/orchestrator.ts are 5
 # each (DEFAULT_MATCH_BATCH_ISRC / DEFAULT_MATCH_BATCH_FUZZY). Reduced to 2
@@ -36,8 +45,8 @@ MATCH_BATCH_FUZZY = "2"
 # visible in the CF Access redirect URL, AUD is part of every CF Access JWT's
 # `aud` claim. Kept in [vars] rather than `wrangler secret put` so changes go
 # through PR review.
-CF_ACCESS_TEAM = "eovidiu"
-CF_ACCESS_AUD = "56f972bf34c35729e737048ba533d1444ba7951cbd4795d3d59f20167daabd6c"
+CF_ACCESS_TEAM = "<YOUR_CF_ACCESS_TEAM>"
+CF_ACCESS_AUD = "<YOUR_CF_ACCESS_AUD>"
 
 [observability]
 [observability.logs]

@@ -10,6 +10,8 @@ export interface Env {
   TIDAL_REDIRECT_URI: string;
   TIDAL_COUNTRY_CODE: string;
   TIDAL_PLAYLIST_TITLE: string;
+  /** Operator email allowed past the Cloudflare Access JWT gate. Single-tenant. (F-019) */
+  OPERATOR_EMAIL: string;
   /** Test-only: overrides the 300 s wall-time cap. Absent in production. */
   WALL_TIME_OVERRIDE_MS?: string;
   /** Per-invocation Spotify Liked Songs page budget. Defaults to 1. (F-015) */

@@ -4,7 +4,6 @@ import type { Env } from "../env";
 
 export type Principal = { kind: "user"; email: string } | { kind: "service" };
 
-const ALLOWED_EMAIL = "eovidiu@gmail.com";
 const JWKS_CACHE_MAX_AGE_MS = 600_000;
 
 let cachedResolver: JWTVerifyGetKey | null = null;
@@ -43,7 +42,8 @@ export function cfAccessMiddleware(
 
     const team = c.env.CF_ACCESS_TEAM;
     const aud = c.env.CF_ACCESS_AUD;
-    if (!team || !aud) {
+    const allowedEmail = c.env.OPERATOR_EMAIL;
+    if (!team || !aud || !allowedEmail) {
       return reject(503, "cf_access_misconfigured");
     }
 
@@ -54,7 +54,7 @@ export function cfAccessMiddleware(
         audience: aud,
       });
       const email = typeof payload.email === "string" ? payload.email : "";
-      if (email !== ALLOWED_EMAIL) {
+      if (email !== allowedEmail) {
         return reject(403, "forbidden");
       }
       c.set("principal", { kind: "user", email });

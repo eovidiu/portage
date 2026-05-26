@@ -33,8 +33,8 @@ function makeEnv(overrides: Partial<Record<string, string>> = {}): Record<string
     DATABASE_URL: env.DATABASE_URL ?? "postgresql://localhost/test",
     TIDAL_COUNTRY_CODE: "RO",
     TIDAL_PLAYLIST_TITLE: "Spotify Liked",
-    SPOTIFY_REDIRECT_URI: "https://portage.eovidiu.co.uk/auth/spotify/callback",
-    TIDAL_REDIRECT_URI: "https://portage.eovidiu.co.uk/auth/tidal/callback",
+    SPOTIFY_REDIRECT_URI: "https://example.com/auth/spotify/callback",
+    TIDAL_REDIRECT_URI: "https://example.com/auth/tidal/callback",
     ...overrides,
   };
 }

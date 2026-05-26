@@ -13,7 +13,7 @@ The Worker SHALL expose `GET /api/me` returning a JSON body
 - **WHEN** an authenticated request reaches `GET /api/me` via Cloudflare
   Access (`c.var.principal.kind === "user"`)
 - **THEN** the response is `200 OK` with body
-  `{ "email": "eovidiu@gmail.com", "kind": "user" }`
+  `{ "email": "<OPERATOR_EMAIL>", "kind": "user" }`
 
 #### Scenario: Service caller (Bearer JWT)
 - **WHEN** an authenticated request reaches `GET /api/me` with a valid
