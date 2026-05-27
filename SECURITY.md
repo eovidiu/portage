@@ -20,7 +20,7 @@ infrastructure between operators.
 The most relevant attack surfaces are therefore the operator's own setup:
 
 - The Worker's HTTP routes (`/sync/*`, `/unmatched/*`, `/api/*`,
-  `/auth/spotify/authorize`, `/auth/tidal/authorize`). These are gated by
+  `/auth/spotify`, `/auth/tidal`). These are gated by
   either a Cloudflare Access JWT (for browser users) or a Bearer JWT signed
   by `JWT_SECRET` (for service callers and the cron). The public-skip list
   is limited to `/healthz`, `/readyz`, and the two OAuth callback paths.

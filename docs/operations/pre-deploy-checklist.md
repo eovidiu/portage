@@ -25,8 +25,7 @@ the last release:
   `searchresults` reference.
 - Tidal playlist endpoints — `src/providers/tidal/playlist-endpoints.ts`
   against the Tidal Open API v2 playlists reference (create-playlist body
-  shape, add-tracks body shape, `users/{userId}/relationships/playlists`
-  linking call).
+  shape, add-tracks body shape).
 - Tidal track-by-id endpoint — `src/routes/unmatched.ts` (used for the
   manual-match flow's existence check).
 - Tidal app scopes — `src/providers/tidal/scopes.ts` against the scope

@@ -57,14 +57,14 @@ Shipped OpenSpec features at time of writing:
 
 | Feature | Capability | Archive path |
 |---|---|---|
-| F-019 | CF Access JWT middleware | `openspec/changes/archive/<date>-cf-access-auth/` |
+| F-019 | CF Access JWT middleware | `openspec/changes/archive/2026-05-16-portage-ui-foundation/specs/cf-access-auth/` |
 | F-020 | `GET /api/me` | included with portage-ui-foundation change |
 | F-021 | `GET /api/playlists` | included with portage-ui-foundation change |
 | F-022 | `POST /api/playlists` | included with portage-ui-foundation change |
 | F-023 | Silent-abandon orchestrator catch | (predates archive workflow) |
 | F-024 | Manual Tidal catalog search | `openspec/changes/archive/2026-05-15-f-024-tidal-catalog-search/` |
-| F-025 | Rematch heuristic sweep | `openspec/changes/archive/<date>-f-025-rematch-heuristic/` |
-| F-026, F-026a, F-026b | Playlist toggle + enabled column | `openspec/changes/archive/<date>-playlists-table-and-toggle/` |
+| F-025 | Rematch heuristic sweep | `openspec/changes/archive/2026-05-16-f-025-rematch-heuristic/` |
+| F-026, F-026a, F-026b | Playlist toggle + enabled column | `openspec/changes/archive/2026-05-17-playlists-table-and-toggle/` |
 | F-027 | Per-run track manifest | `openspec/changes/archive/2026-05-17-per-run-track-detail/` |
 | F-027a | Persisted fuzzy candidates + manual-match `sync_run_id` | `openspec/changes/archive/2026-05-17-pick-from-fuzzy-candidates/` |
 | F-028 | Flexible fuzzy matching algorithm | `openspec/changes/archive/` (see commit history) |

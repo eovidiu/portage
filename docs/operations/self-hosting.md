@@ -195,7 +195,7 @@ the structured error log.
 Mint the initial Spotify token by visiting the authorize endpoint in your
 browser:
 
-```
+```text
 https://<your-worker-domain>/auth/spotify
 ```
 
@@ -205,7 +205,7 @@ body looks like `{"status":"connected","provider":"spotify"}`.
 
 Repeat for Tidal:
 
-```
+```text
 https://<your-worker-domain>/auth/tidal
 ```
 
@@ -234,6 +234,10 @@ one-off manual trigger is to mint a Bearer JWT signed by `JWT_SECRET`:
 ```bash
 JWT_SECRET="<value from step 6>" npx tsx scripts/mint-bootstrap-token.ts
 ```
+
+The first invocation of `npx tsx` may prompt to install `tsx@4.x` —
+accept it. `tsx` is not a project dependency because the bootstrap
+token mint is a one-off setup step, not part of the runtime.
 
 Save the printed JWT in your password manager. Then trigger a sync:
 
