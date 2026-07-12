@@ -68,6 +68,7 @@ Shipped OpenSpec features at time of writing:
 | F-027 | Per-run track manifest | `openspec/changes/archive/2026-05-17-per-run-track-detail/` |
 | F-027a | Persisted fuzzy candidates + manual-match `sync_run_id` | `openspec/changes/archive/2026-05-17-pick-from-fuzzy-candidates/` |
 | F-028 | Flexible fuzzy matching algorithm | `openspec/changes/archive/` (see commit history) |
+| F-029 | ntfy push notifications for sync runs | `openspec/changes/f-029-ntfy-notifications/` (pre-archive) |
 
 If you're looking for the spec for any feature ≥ F-019, search
 `openspec/changes/archive/` rather than `docs/specs/`.

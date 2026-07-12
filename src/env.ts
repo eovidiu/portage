@@ -30,4 +30,14 @@ export interface Env {
   CF_ACCESS_TEAM?: string;
   /** Cloudflare Access Application Audience tag — `aud` claim on the Access JWT. (F-019) */
   CF_ACCESS_AUD?: string;
+  /**
+   * ntfy topic for sync-run push notifications. Worker secret — on the public
+   * ntfy.sh server the topic name is the only access control. Notifications
+   * are disabled entirely when unset. (F-029)
+   */
+  NTFY_TOPIC?: string;
+  /** ntfy base URL for self-hosted instances. Defaults to https://ntfy.sh. (F-029) */
+  NTFY_URL?: string;
+  /** Optional ntfy access token, sent as `Authorization: Bearer`. Worker secret. (F-029) */
+  NTFY_TOKEN?: string;
 }

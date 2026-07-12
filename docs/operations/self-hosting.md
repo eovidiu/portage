@@ -169,6 +169,25 @@ The remaining variables (`TIDAL_COUNTRY_CODE`, `TIDAL_PLAYLIST_TITLE`,
 `UI_ORIGIN`, `MATCH_BATCH_*`) are non-secret and live in `wrangler.toml`
 under `[vars]` — wrangler picks them up at deploy.
 
+### Optional: push notifications via ntfy (F-029)
+
+Portage can push a notification to an [ntfy](https://ntfy.sh) topic after
+every sync run: low-priority on success, high-priority when a run fails,
+goes partial, or a previous run was killed before finishing (the
+abandoned-run sweep). To enable it:
+
+1. Pick a long, hard-to-guess topic name — on the public ntfy.sh server the
+   topic name is the only access control, so treat it like a password
+   (e.g. `openssl rand -hex 12` prefixed with something readable).
+2. Subscribe to that topic in the ntfy app (iOS/Android) or web app.
+3. Set it as a secret: `wrangler secret put NTFY_TOPIC`.
+
+Optional extras: `wrangler secret put NTFY_TOKEN` if you use a reserved
+topic with access tokens, and an `NTFY_URL` var in `wrangler.toml` if you
+run a self-hosted ntfy server (defaults to `https://ntfy.sh`). Leaving
+`NTFY_TOPIC` unset disables notifications entirely; deleting the secret is
+the rollback.
+
 ## 7. Deploy the Worker
 
 ```bash

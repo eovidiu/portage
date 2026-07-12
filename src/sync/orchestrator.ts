@@ -15,6 +15,11 @@ import { writePlaylist } from "./playlist-writer";
 import { seedPlaylistConfigs } from "./playlist-config-seeder";
 import { listEnabledPlaylistConfigs, markSynced } from "../db/playlist_configs";
 import { fetchPlaylistTracks } from "../providers/spotify/playlists";
+import {
+  notifyAbandonedSweep,
+  notifyOrchestratorCrash,
+  notifySyncOutcome,
+} from "../notify/ntfy";
 
 export type OrchestratorOutcome =
   | "succeeded"
@@ -350,13 +355,11 @@ async function runSyncBody(
   return result;
 }
 
-export async function runSync(env: Env): Promise<OrchestratorResult> {
+async function runSyncCore(env: Env): Promise<OrchestratorResult> {
   const wallTimeMs =
     env.WALL_TIME_OVERRIDE_MS !== undefined
       ? Number(env.WALL_TIME_OVERRIDE_MS)
       : DEFAULT_WALL_TIME_MS;
-
-  await markAbandonedRuns(env);
 
   const session = await acquireLock(env);
   if (!session) {
@@ -454,4 +457,26 @@ export async function runSync(env: Env): Promise<OrchestratorResult> {
   } finally {
     await releaseLock(session);
   }
+}
+
+// F-029: single notification choke point. Both src/scheduled.ts and
+// POST /sync/run call runSync, so hooking here covers scheduled runs, manual
+// runs, and manual runs that outlive the route's 25 s response race. The
+// notify functions never throw (failures log ntfy_notify_failed), so a
+// notification cannot fail or alter a sync. `skipped_locked` stays silent —
+// the invocation holding the lock notifies for both.
+export async function runSync(env: Env): Promise<OrchestratorResult> {
+  let result: OrchestratorResult;
+  try {
+    const abandonedCount = await markAbandonedRuns(env);
+    if (abandonedCount > 0) {
+      await notifyAbandonedSweep(env, abandonedCount);
+    }
+    result = await runSyncCore(env);
+  } catch (err) {
+    await notifyOrchestratorCrash(env, err);
+    throw err;
+  }
+  await notifySyncOutcome(env, result);
+  return result;
 }

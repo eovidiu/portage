@@ -47,6 +47,10 @@ before deploying.
   `SPOTIFY_REDIRECT_URI`, `TIDAL_REDIRECT_URI`, `TIDAL_COUNTRY_CODE`,
   `TIDAL_PLAYLIST_TITLE`, `OPERATOR_EMAIL`, `UI_ORIGIN`, and (if
   Cloudflare Access is enabled) `CF_ACCESS_TEAM` + `CF_ACCESS_AUD`.
+- If ntfy notifications are enabled (F-029): `NTFY_TOPIC` (and optionally
+  `NTFY_TOKEN`) appear in `wrangler secret list` and the topic is
+  subscribed in the ntfy app. Unset = notifications off, which is also
+  the rollback path.
 - Schema is current: `db/schema.sql` re-applied if the release notes
   mention schema changes.
 

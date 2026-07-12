@@ -18,6 +18,10 @@ plugin, no server to babysit.
   `unmatched` queue with the top fuzzy candidates ranked for manual review.
 - Ships an optional companion UI ([portage-ui](https://github.com/eovidiu/portage-ui))
   for browsing sync runs and picking among fuzzy candidates from a browser.
+- Optionally pushes a notification to an [ntfy](https://ntfy.sh) topic after
+  every sync run — quiet on success, high-priority when a run fails, goes
+  partial, or a previous run was killed before finishing. Enabled by setting
+  the `NTFY_TOPIC` secret; off otherwise.
 - Roon, configured with your Tidal account, picks the playlist up natively
   the next time it scans. No Roon-side integration required.
 
