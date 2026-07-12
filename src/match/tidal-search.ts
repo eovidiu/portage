@@ -26,6 +26,7 @@ import {
 } from "./json-api";
 import type { ResolvedTidalCandidate } from "./score";
 
+// Verified: https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json — server https://openapi.tidal.com/v2, path /searchResults/{id} (marker lost when F-024 extracted this constant from fuzzy.ts; re-verified 2026-07-12)
 const TIDAL_SEARCH_BASE = "https://openapi.tidal.com/v2/searchResults";
 
 export interface SearchResult {
