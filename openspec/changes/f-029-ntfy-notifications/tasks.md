@@ -14,4 +14,4 @@
 
 - [x] 3.1 `npm test` full suite + `npm run typecheck` green
 - [x] 3.2 Register F-029 in `.harness/features.json`; update README captures row / docs/operations/pre-deploy-checklist.md with NTFY secret setup; add NTFY vars to `.env.example` placeholders if the file exists
-- [ ] 3.3 Commit referencing F-029; live-verify by publishing through the real code path to a scratch topic
+- [x] 3.3 Commit referencing F-029; live-verify by publishing through the real code path to a scratch topic
