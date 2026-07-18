@@ -4,7 +4,12 @@ export default defineWorkersConfig({
   test: {
     // Exclude integration tests (require Node APIs, run via test:integration)
     // and e2e tests (require a running wrangler dev, run via test:e2e)
-    exclude: ["tests/integration/**", "tests/e2e/**", "node_modules/**"],
+    exclude: [
+      "tests/integration/**",
+      "tests/e2e/**",
+      "**/node_modules/**",
+      ".claude/**",
+    ],
     poolOptions: {
       workers: {
         wrangler: { configPath: "./wrangler.toml" },
