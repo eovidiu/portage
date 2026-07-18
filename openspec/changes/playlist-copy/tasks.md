@@ -2,22 +2,22 @@
 
 ## 1. Schema and provider foundations
 
-- [ ] 1.1 Add `copy_jobs` + `copy_job_tracks` tables and `provider_tokens.scopes`
+- [x] 1.1 Add `copy_jobs` + `copy_job_tracks` tables and `provider_tokens.scopes`
       column to `db/schema.sql`; apply to Neon (additive, inert)
-- [ ] 1.2 Create `src/providers/spotify/scopes.ts`; switch the authorize-URL builder
+- [x] 1.2 Create `src/providers/spotify/scopes.ts`; switch the authorize-URL builder
       to it; persist granted `scope` string on token exchange/refresh (tests first)
-- [ ] 1.3 Fix `getPlaylistTracks` cursor path to `links.meta.nextCursor`; correct
+- [x] 1.3 Fix `getPlaylistTracks` cursor path to `links.meta.nextCursor`; correct
       test mocks to the OAS shape; add a multi-page pagination test that fails on
       the old code
-- [ ] 1.4 Add Tidal rich item reader (id, isrc, title, duration_ms, artist ids from
+- [x] 1.4 Add Tidal rich item reader (id, isrc, title, duration_ms, artist ids from
       `included[]`) + batched `GET /v2/artists?filter[id]=` name resolver
-- [ ] 1.5 Add Tidal list-own-playlists client
+- [x] 1.5 Add Tidal list-own-playlists client
       (`GET /v2/playlists?filter[owners.id]=me`, cursor pagination)
-- [ ] 1.6 Add Spotify list-own-playlists client (`GET /v1/me/playlists`, offset
+- [x] 1.6 Add Spotify list-own-playlists client (`GET /v1/me/playlists`, offset
       pagination)
-- [ ] 1.7 Add Spotify write client: `POST /v1/me/playlists` (private) and
+- [x] 1.7 Add Spotify write client: `POST /v1/me/playlists` (private) and
       `POST /v1/playlists/{id}/items` (≤50 URIs, 429 retry-once)
-- [ ] 1.8 Add Spotify catalog search: ISRC lookup with artist/duration gates, fuzzy
+- [x] 1.8 Add Spotify catalog search: ISRC lookup with artist/duration gates, fuzzy
       search mapped into `score.ts` ranking, top-3 candidate capture
 
 ## 2. Copy job engine
