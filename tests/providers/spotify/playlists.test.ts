@@ -32,6 +32,7 @@ vi.mock("../../../src/providers/spotify/oauth", () => ({
 import {
   fetchSpotifyPlaylistName,
   fetchPlaylistTracks,
+  listOwnPlaylists,
 } from "../../../src/providers/spotify/playlists";
 import { spotifyFetch } from "../../../src/providers/spotify/oauth";
 
@@ -486,6 +487,190 @@ describe("F-017 multi-page: non-last-page persistence outside transaction", () =
 
     // Two Spotify calls (page 0 and page 1)
     expect(mockSpotifyFetch).toHaveBeenCalledTimes(2);
+  });
+});
+
+// =============================================================================
+// listOwnPlaylists (F-030 task 1.6)
+// =============================================================================
+
+describe("listOwnPlaylists — GET /v1/me/playlists (F-030)", () => {
+  it("issues GET /v1/me/playlists?limit=50&offset=0 by default", async () => {
+    mockSpotifyFetch.mockResolvedValueOnce(
+      makeOkResponse({
+        items: [],
+        next: null,
+        offset: 0,
+        limit: 50,
+        total: 0,
+      }),
+    );
+
+    await listOwnPlaylists(makeEnv());
+
+    expect(mockSpotifyFetch).toHaveBeenCalledOnce();
+    const [, url] = mockSpotifyFetch.mock.calls[0] as [Env, string];
+    expect(url).toBe("https://api.spotify.com/v1/me/playlists?limit=50&offset=0");
+  });
+
+  it("defaults trackCount to 0 when the item omits tracks", async () => {
+    mockSpotifyFetch.mockResolvedValueOnce(
+      makeOkResponse({
+        items: [{ id: "p3", name: "No Count" }],
+        next: null,
+        offset: 0,
+        limit: 50,
+        total: 1,
+      }),
+    );
+
+    const result = await listOwnPlaylists(makeEnv());
+    expect(result.playlists).toEqual([{ id: "p3", name: "No Count", trackCount: 0 }]);
+  });
+
+  it("maps items to { id, name, trackCount }", async () => {
+    mockSpotifyFetch.mockResolvedValueOnce(
+      makeOkResponse({
+        items: [
+          { id: "p1", name: "Workout", tracks: { total: 42 } },
+          { id: "p2", name: "Chill", tracks: { total: 7 } },
+        ],
+        next: null,
+        offset: 0,
+        limit: 50,
+        total: 2,
+      }),
+    );
+
+    const result = await listOwnPlaylists(makeEnv());
+
+    expect(result.playlists).toEqual([
+      { id: "p1", name: "Workout", trackCount: 42 },
+      { id: "p2", name: "Chill", trackCount: 7 },
+    ]);
+  });
+
+  it("returns nextOffset = offset + limit when the response's next is non-null", async () => {
+    mockSpotifyFetch.mockResolvedValueOnce(
+      makeOkResponse({
+        items: [{ id: "p1", name: "Workout", tracks: { total: 42 } }],
+        next: "https://api.spotify.com/v1/me/playlists?limit=50&offset=50",
+        offset: 0,
+        limit: 50,
+        total: 120,
+      }),
+    );
+
+    const result = await listOwnPlaylists(makeEnv());
+    expect(result.nextOffset).toBe(50);
+  });
+
+  it("returns nextOffset = null when the response's next is null (last page)", async () => {
+    mockSpotifyFetch.mockResolvedValueOnce(
+      makeOkResponse({
+        items: [{ id: "p1", name: "Workout", tracks: { total: 42 } }],
+        next: null,
+        offset: 100,
+        limit: 50,
+        total: 101,
+      }),
+    );
+
+    const result = await listOwnPlaylists(makeEnv());
+    expect(result.nextOffset).toBeNull();
+  });
+
+  it("honors an explicit offset param", async () => {
+    mockSpotifyFetch.mockResolvedValueOnce(
+      makeOkResponse({ items: [], next: null, offset: 50, limit: 50, total: 50 }),
+    );
+
+    await listOwnPlaylists(makeEnv(), 50);
+
+    const [, url] = mockSpotifyFetch.mock.calls[0] as [Env, string];
+    expect(url).toBe("https://api.spotify.com/v1/me/playlists?limit=50&offset=50");
+  });
+
+  it("defaults to a 1s retry delay when Retry-After is absent", async () => {
+    vi.useFakeTimers();
+    try {
+      const noHeaderResponse = {
+        ok: false,
+        status: 429,
+        headers: new Headers(),
+        json: () => Promise.resolve({}),
+      } as unknown as Response;
+
+      mockSpotifyFetch
+        .mockResolvedValueOnce(noHeaderResponse)
+        .mockResolvedValueOnce(
+          makeOkResponse({ items: [], next: null, offset: 0, limit: 50, total: 0 }),
+        );
+
+      const p = listOwnPlaylists(makeEnv());
+      await vi.advanceTimersByTimeAsync(1100);
+      await p;
+
+      expect(mockSpotifyFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries once on 429 honoring Retry-After", async () => {
+    vi.useFakeTimers();
+    try {
+      mockSpotifyFetch
+        .mockResolvedValueOnce(make429Response("1"))
+        .mockResolvedValueOnce(
+          makeOkResponse({ items: [], next: null, offset: 0, limit: 50, total: 0 }),
+        );
+
+      const p = listOwnPlaylists(makeEnv());
+      await vi.advanceTimersByTimeAsync(1100);
+      await p;
+
+      expect(mockSpotifyFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("throws when Spotify returns 429 twice in a row", async () => {
+    vi.useFakeTimers();
+    try {
+      mockSpotifyFetch
+        .mockResolvedValueOnce(make429Response("1"))
+        .mockResolvedValueOnce(make429Response("1"));
+
+      const p = listOwnPlaylists(makeEnv());
+      await vi.advanceTimersByTimeAsync(1100);
+      await expect(p).rejects.toThrow(/rate limit|429/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("throws on non-OK, non-429 response", async () => {
+    mockSpotifyFetch.mockResolvedValueOnce(
+      new Response("server error", { status: 500 }) as unknown as Response,
+    );
+    await expect(listOwnPlaylists(makeEnv())).rejects.toThrow(/500/);
+  });
+
+  it("throws when the 429 retry itself returns a non-OK response", async () => {
+    vi.useFakeTimers();
+    try {
+      mockSpotifyFetch
+        .mockResolvedValueOnce(make429Response("1"))
+        .mockResolvedValueOnce(new Response("server error", { status: 500 }) as unknown as Response);
+
+      const p = listOwnPlaylists(makeEnv());
+      await vi.advanceTimersByTimeAsync(1100);
+      await expect(p).rejects.toThrow(/API error on retry.*500/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
