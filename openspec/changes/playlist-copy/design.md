@@ -165,8 +165,9 @@ conservatism, env-tunable via `[vars]`:
 | matching | `COPY_BATCH_ISRC=2` ISRC lookups, then `COPY_BATCH_FUZZY=2` fuzzy searches | ≤5 |
 | writing | 1 batch (≤20 Tidal / ≤50 Spotify URIs) | ≤2 |
 
-Plus lock + a handful of Neon queries (HTTP driver: 1 subrequest each). Worst tick
-stays under ~15 subrequests. State is persisted after every step (cursor advance
+Plus lock + a handful of Neon queries (HTTP driver: 1 subrequest each). Worst
+observed matching tick (ISRC-pool tracks failing both ISRC and fuzzy at budgets
+2/2) is 19 subrequests — still well under the 50 hard cap. State is persisted after every step (cursor advance
 rule mirrors I-005: persist page rows atomically with the cursor). A 250-track
 playlist ≈ 5 fetch + 63 match + 13 write ticks ≈ 7 hours at `*/5` — within the
 "may take hours" acceptance.
