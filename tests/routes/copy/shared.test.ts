@@ -8,7 +8,7 @@ vi.mock("../../../src/providers/spotify/playlists", () => ({
 }));
 vi.mock("../../../src/providers/tidal/playlist", () => ({ getPlaylist: vi.fn() }));
 
-import { findOwnPlaylist, resolveSourceName } from "../../../src/routes/copy/shared";
+import { findOwnPlaylist, resolveSourceName, directionFor, destProviderFor } from "../../../src/routes/copy/shared";
 import { listOwnPlaylists as listTidalOwnPlaylists } from "../../../src/providers/tidal/own-playlists";
 import {
   listOwnPlaylists as listSpotifyOwnPlaylists,
@@ -25,6 +25,18 @@ const mockEnv = { DATABASE_URL: "postgresql://test" } as Env;
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe("directionFor / destProviderFor", () => {
+  it("maps spotify source to spotify_to_tidal, dest tidal", () => {
+    expect(directionFor("spotify")).toBe("spotify_to_tidal");
+    expect(destProviderFor("spotify")).toBe("tidal");
+  });
+
+  it("maps tidal source to tidal_to_spotify, dest spotify", () => {
+    expect(directionFor("tidal")).toBe("tidal_to_spotify");
+    expect(destProviderFor("tidal")).toBe("spotify");
+  });
 });
 
 describe("findOwnPlaylist", () => {
@@ -56,6 +68,46 @@ describe("findOwnPlaylist", () => {
     });
     const result = await findOwnPlaylist(mockEnv, "tidal", "missing");
     expect(result).toBe(false);
+  });
+
+  it("advances through multiple Tidal pages before concluding not found", async () => {
+    mockListTidalOwnPlaylists
+      .mockResolvedValueOnce({ playlists: [{ id: "other", name: "O", numberOfItems: 1 }], hasMore: true, cursor: "c1" })
+      .mockResolvedValueOnce({ playlists: [{ id: "p1", name: "P1", numberOfItems: 3 }], hasMore: false, cursor: null });
+
+    const result = await findOwnPlaylist(mockEnv, "tidal", "missing");
+    expect(result).toBe(false);
+    expect(mockListTidalOwnPlaylists).toHaveBeenNthCalledWith(2, mockEnv, "c1");
+  });
+
+  it("returns false when the Spotify id never appears and nextOffset is null", async () => {
+    mockListSpotifyOwnPlaylists.mockResolvedValueOnce({
+      playlists: [{ id: "other", name: "O", trackCount: 1 }],
+      nextOffset: null,
+    });
+    const result = await findOwnPlaylist(mockEnv, "spotify", "missing");
+    expect(result).toBe(false);
+  });
+
+  it("gives up after MAX_OWNERSHIP_PAGES for an operator with an unbounded Tidal library", async () => {
+    mockListTidalOwnPlaylists.mockResolvedValue({
+      playlists: [{ id: "other", name: "O", numberOfItems: 1 }],
+      hasMore: true,
+      cursor: "next",
+    });
+    const result = await findOwnPlaylist(mockEnv, "tidal", "missing");
+    expect(result).toBe(false);
+    expect(mockListTidalOwnPlaylists).toHaveBeenCalledTimes(100);
+  });
+
+  it("gives up after MAX_OWNERSHIP_PAGES for an operator with an unbounded Spotify library", async () => {
+    mockListSpotifyOwnPlaylists.mockResolvedValue({
+      playlists: [{ id: "other", name: "O", trackCount: 1 }],
+      nextOffset: 999,
+    });
+    const result = await findOwnPlaylist(mockEnv, "spotify", "missing");
+    expect(result).toBe(false);
+    expect(mockListSpotifyOwnPlaylists).toHaveBeenCalledTimes(100);
   });
 });
 
