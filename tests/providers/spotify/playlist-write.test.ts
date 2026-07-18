@@ -163,3 +163,14 @@ describe("addItems — POST /v1/playlists/{id}/items (F-030)", () => {
     await expect(addItems(makeEnv(), "PLAYLIST1", ["t1"])).rejects.toThrow(/500/);
   });
 });
+
+describe("addItems — playlist id encoding", () => {
+  it("percent-encodes the playlist id in the items URL", async () => {
+    mockSpotifyFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ snapshot_id: "s1" }), { status: 201 }),
+    );
+    await addItems(makeEnv(), "p l/1", ["t1"]);
+    const url = mockSpotifyFetch.mock.calls[0][1] as string;
+    expect(url).toContain("/playlists/p%20l%2F1/items");
+  });
+});

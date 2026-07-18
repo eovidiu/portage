@@ -193,8 +193,11 @@ CREATE TABLE IF NOT EXISTS copy_jobs (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     finished_at         TIMESTAMPTZ
 );
-CREATE INDEX IF NOT EXISTS idx_copy_jobs_active
-    ON copy_jobs (created_at DESC)
+-- Partial UNIQUE index: at most one non-terminal job may exist. The insert
+-- in createJob maps a 23505 violation to the API's 409 job_already_active,
+-- closing the check-then-insert race on concurrent POST /api/copy/jobs.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_copy_jobs_single_active
+    ON copy_jobs ((true))
     WHERE status IN ('queued','fetching','matching','writing');
 
 -- F-030: per-track copy state. position preserves source playlist order and is

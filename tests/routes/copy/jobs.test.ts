@@ -446,3 +446,52 @@ describe("unauthenticated", () => {
     expect(mockListJobs).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /api/copy/jobs — hardening", () => {
+  it("maps a unique-violation race to 409 job_already_active", async () => {
+    mockLoadActiveJob.mockResolvedValueOnce(null);
+    mockResolveSourceName.mockResolvedValueOnce("My Source Playlist");
+    mockCreateJob.mockResolvedValueOnce(null);
+    const res = await doFetch("/api/copy/jobs", {
+      method: "POST",
+      body: { source_provider: "spotify", source_playlist_id: "src-1", dest_mode: "new" },
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "job_already_active" });
+  });
+
+  it("rejects an overlong source_playlist_id with 422", async () => {
+    const res = await doFetch("/api/copy/jobs", {
+      method: "POST",
+      body: { source_provider: "spotify", source_playlist_id: "x".repeat(65), dest_mode: "new" },
+    });
+    expect(res.status).toBe(422);
+    expect(mockLoadActiveJob).not.toHaveBeenCalled();
+  });
+
+  it("rejects an overlong dest_name with 422", async () => {
+    const res = await doFetch("/api/copy/jobs", {
+      method: "POST",
+      body: {
+        source_provider: "spotify",
+        source_playlist_id: "src-1",
+        dest_mode: "new",
+        dest_name: "n".repeat(201),
+      },
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it("rejects an overlong dest_playlist_id with 422", async () => {
+    const res = await doFetch("/api/copy/jobs", {
+      method: "POST",
+      body: {
+        source_provider: "tidal",
+        source_playlist_id: "src-1",
+        dest_mode: "append",
+        dest_playlist_id: "y".repeat(65),
+      },
+    });
+    expect(res.status).toBe(422);
+  });
+});

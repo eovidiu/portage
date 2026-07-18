@@ -50,7 +50,7 @@ export async function fetchSpotifyPlaylistName(
   env: Env,
   spotifyPlaylistId: string,
 ): Promise<string> {
-  const url = `${SPOTIFY_PLAYLIST_URL}${spotifyPlaylistId}?fields=name`;
+  const url = `${SPOTIFY_PLAYLIST_URL}${encodeURIComponent(spotifyPlaylistId)}?fields=name`;
   const response = await spotifyFetch(env, url);
 
   if (!response.ok) {

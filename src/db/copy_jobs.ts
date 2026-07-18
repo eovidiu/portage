@@ -16,7 +16,7 @@ export type CopyJobStatus =
   | "failed"
   | "cancelled";
 
-// Mirrors the partial index idx_copy_jobs_active (db/schema.sql) — keep in sync.
+// Mirrors the partial unique index idx_copy_jobs_single_active (db/schema.sql) — keep in sync.
 export const NON_TERMINAL_STATUSES: CopyJobStatus[] = [
   "queued",
   "fetching",
@@ -56,28 +56,37 @@ export interface CreateJobInput {
   dest_known_ids?: string[] | null;
 }
 
-export async function createJob(env: Env, input: CreateJobInput): Promise<CopyJobRow> {
+/**
+ * Null means the idx_copy_jobs_single_active partial unique index rejected
+ * the insert — another non-terminal job won a concurrent-create race.
+ */
+export async function createJob(env: Env, input: CreateJobInput): Promise<CopyJobRow | null> {
   const sql = neon(env.DATABASE_URL);
-  const rows = await sql(
-    `INSERT INTO copy_jobs
-       (direction, source_playlist_id, source_name, dest_mode,
-        dest_playlist_id, dest_name, dest_known_ids)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-     RETURNING *`,
-    [
-      input.direction,
-      input.source_playlist_id,
-      input.source_name,
-      input.dest_mode,
-      input.dest_playlist_id ?? null,
-      input.dest_name ?? null,
-      input.dest_known_ids != null ? JSON.stringify(input.dest_known_ids) : null,
-    ],
-  );
-  return (rows as CopyJobRow[])[0];
+  try {
+    const rows = await sql(
+      `INSERT INTO copy_jobs
+         (direction, source_playlist_id, source_name, dest_mode,
+          dest_playlist_id, dest_name, dest_known_ids)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+       RETURNING *`,
+      [
+        input.direction,
+        input.source_playlist_id,
+        input.source_name,
+        input.dest_mode,
+        input.dest_playlist_id ?? null,
+        input.dest_name ?? null,
+        input.dest_known_ids != null ? JSON.stringify(input.dest_known_ids) : null,
+      ],
+    );
+    return (rows as CopyJobRow[])[0];
+  } catch (err) {
+    if ((err as { code?: string }).code === "23505") return null;
+    throw err;
+  }
 }
 
-/** Idle fast-path: one query, uses idx_copy_jobs_active. Null when no active job. */
+/** Idle fast-path: one query against the non-terminal predicate. Null when no active job. */
 export async function loadActiveJob(env: Env): Promise<CopyJobRow | null> {
   const sql = neon(env.DATABASE_URL);
   const rows = await sql(

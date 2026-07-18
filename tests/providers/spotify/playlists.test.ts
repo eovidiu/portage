@@ -700,3 +700,17 @@ describe("T-017-19: one fetch_page log line per page with playlist_id", () => {
     logSpy.mockRestore();
   });
 });
+
+describe("fetchSpotifyPlaylistName — playlist id encoding", () => {
+  it("percent-encodes the playlist id in the request URL", async () => {
+    mockSpotifyFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ name: "X" }), { status: 200 }),
+    );
+    const { fetchSpotifyPlaylistName } = await import(
+      "../../../src/providers/spotify/playlists"
+    );
+    await fetchSpotifyPlaylistName(makeEnv(), "p l/1");
+    const url = mockSpotifyFetch.mock.calls[0][1] as string;
+    expect(url).toContain("/playlists/p%20l%2F1?fields=name");
+  });
+});

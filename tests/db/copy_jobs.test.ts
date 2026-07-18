@@ -240,3 +240,24 @@ describe("countSkipped", () => {
     expect(result).toBe(0);
   });
 });
+
+describe("createJob — single-active unique index", () => {
+  const input = {
+    direction: "spotify_to_tidal",
+    source_playlist_id: "src-1",
+    source_name: "P",
+    dest_mode: "new",
+  } as const;
+
+  it("returns null when the partial unique index rejects a second active job", async () => {
+    mockSql.mockRejectedValueOnce(
+      Object.assign(new Error("duplicate key value"), { code: "23505" }),
+    );
+    expect(await createJob(mockEnv, input)).toBeNull();
+  });
+
+  it("rethrows other database errors", async () => {
+    mockSql.mockRejectedValueOnce(Object.assign(new Error("boom"), { code: "42P01" }));
+    await expect(createJob(mockEnv, input)).rejects.toThrow("boom");
+  });
+});

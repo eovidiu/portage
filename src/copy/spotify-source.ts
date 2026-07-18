@@ -104,7 +104,9 @@ export async function getSpotifyPlaylistItems(
   playlistId: string,
   cursor: string | null,
 ): Promise<SpotifySourcePage> {
-  const url = cursor ?? `https://api.spotify.com/v1/playlists/${playlistId}/tracks?limit=${PAGE_LIMIT}`;
+  const url =
+    cursor ??
+    `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks?limit=${PAGE_LIMIT}`;
   const page = await fetchPage(env, url);
   const items = page.items.filter((i) => !shouldSkip(i)).map(toSourceItem);
   return { items, hasMore: page.next !== null, cursor: page.next };

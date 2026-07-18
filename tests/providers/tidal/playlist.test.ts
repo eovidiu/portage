@@ -492,3 +492,15 @@ describe("addTracksToPlaylist — _extractInvalidIds edge cases", () => {
     expect(result.invalidIds).toHaveLength(0);
   });
 });
+
+describe("playlist URL builders — id encoding", () => {
+  it("percent-encodes playlist ids in path segments", async () => {
+    const { playlistUrl, playlistTracksUrl } = await import(
+      "../../../src/providers/tidal/playlist-endpoints"
+    );
+    expect(playlistUrl("a/b?c")).toBe("https://openapi.tidal.com/v2/playlists/a%2Fb%3Fc");
+    expect(playlistTracksUrl("a/b")).toBe(
+      "https://openapi.tidal.com/v2/playlists/a%2Fb/relationships/items",
+    );
+  });
+});

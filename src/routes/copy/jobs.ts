@@ -28,14 +28,22 @@ interface ParsedCreateBody {
   dest_name: string | null;
 }
 
+// Provider playlist ids are ≤36 chars in practice (Spotify 22, Tidal UUID 36);
+// 64 leaves headroom without letting arbitrary blobs into TEXT columns.
+const MAX_PLAYLIST_ID_LENGTH = 64;
+const MAX_DEST_NAME_LENGTH = 200;
+
 function validateCreateBody(body: unknown): ParsedCreateBody | null {
   if (typeof body !== "object" || body === null) return null;
   const b = body as Record<string, unknown>;
   if (b.source_provider !== "spotify" && b.source_provider !== "tidal") return null;
   if (typeof b.source_playlist_id !== "string" || b.source_playlist_id.length === 0) return null;
+  if (b.source_playlist_id.length > MAX_PLAYLIST_ID_LENGTH) return null;
   if (b.dest_mode !== "new" && b.dest_mode !== "append") return null;
+  if (typeof b.dest_name === "string" && b.dest_name.length > MAX_DEST_NAME_LENGTH) return null;
 
   const dest_playlist_id = typeof b.dest_playlist_id === "string" ? b.dest_playlist_id : null;
+  if (dest_playlist_id && dest_playlist_id.length > MAX_PLAYLIST_ID_LENGTH) return null;
   if (b.dest_mode === "append" && !dest_playlist_id) return null;
 
   return {
@@ -112,6 +120,7 @@ app.post("/jobs", async (c) => {
     dest_name: parsed.dest_mode === "new" ? (parsed.dest_name ?? sourceName) : parsed.dest_name,
     dest_known_ids: destKnownIds,
   });
+  if (job === null) return c.json({ error: "job_already_active" }, 409);
 
   return c.json({ job_id: job.job_id }, 201);
 });

@@ -83,7 +83,7 @@ export async function addItems(
   }
 
   const uris = trackIds.map((id) => `spotify:track:${id}`);
-  const url = `${SPOTIFY_PLAYLISTS_URL}/${playlistId}/items`;
+  const url = `${SPOTIFY_PLAYLISTS_URL}/${encodeURIComponent(playlistId)}/items`;
   const body = JSON.stringify({ uris });
 
   const first = await spotifyFetch(env, url, { method: "POST", headers: JSON_HEADERS, body });

@@ -19,11 +19,11 @@ export const PLAYLIST_ACCESS_TYPE = "UNLISTED";
 export const TIDAL_PLAYLISTS_URL = "https://openapi.tidal.com/v2/playlists";
 
 export function playlistUrl(playlistId: string): string {
-  return `${TIDAL_PLAYLISTS_URL}/${playlistId}`;
+  return `${TIDAL_PLAYLISTS_URL}/${encodeURIComponent(playlistId)}`;
 }
 
 export function playlistTracksUrl(playlistId: string): string {
-  return `${TIDAL_PLAYLISTS_URL}/${playlistId}/relationships/items`;
+  return `${TIDAL_PLAYLISTS_URL}/${encodeURIComponent(playlistId)}/relationships/items`;
 }
 
 // Verified: 2026-07-18 against tidal-api-oas.json path /artists GET —

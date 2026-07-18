@@ -153,3 +153,14 @@ describe("getSpotifyPlaylistItems", () => {
     vi.useRealTimers();
   });
 });
+
+describe("getSpotifyPlaylistItems — playlist id encoding", () => {
+  it("percent-encodes the playlist id in the first-page URL", async () => {
+    mockSpotifyFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ items: [], next: null }), { status: 200 }),
+    );
+    await getSpotifyPlaylistItems(mockEnv, "p l/1", null);
+    const url = mockSpotifyFetch.mock.calls[0][1] as string;
+    expect(url).toContain("/playlists/p%20l%2F1/tracks");
+  });
+});
