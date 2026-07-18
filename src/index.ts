@@ -14,6 +14,9 @@ import statsRoute from "./routes/stats";
 import unmatchedRoute from "./routes/unmatched";
 import meRoute from "./routes/me";
 import playlistsRoute from "./routes/playlists";
+import copyPlaylistsRoute from "./routes/copy/playlists";
+import copyJobsRoute from "./routes/copy/jobs";
+import copyManualRoute from "./routes/copy/manual";
 import { scheduled } from "./scheduled";
 
 const AUTH_SKIP_PATHS = ["/healthz", "/readyz", "/auth/spotify/callback", "/auth/tidal/callback"];
@@ -49,6 +52,9 @@ app.route("/", statsRoute);
 app.route("/unmatched", unmatchedRoute);
 app.route("/api", meRoute);
 app.route("/api", playlistsRoute);
+app.route("/api/copy", copyPlaylistsRoute);
+app.route("/api/copy", copyJobsRoute);
+app.route("/api/copy", copyManualRoute);
 
 export default {
   fetch: app.fetch,
