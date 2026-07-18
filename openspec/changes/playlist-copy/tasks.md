@@ -22,36 +22,36 @@
 
 ## 2. Copy job engine
 
-- [ ] 2.1 DB modules `src/db/copy_jobs.ts` + `src/db/copy_job_tracks.ts` (create,
+- [x] 2.1 DB modules `src/db/copy_jobs.ts` + `src/db/copy_job_tracks.ts` (create,
       load-active, phase updates, counter recompute, state-flip statements)
-- [ ] 2.2 `runCopyTick` skeleton: idle fast-path (single query), shared advisory
+- [x] 2.2 `runCopyTick` skeleton: idle fast-path (single query), shared advisory
       lock acquire/skip, phase dispatch, persist-before-exit
-- [ ] 2.3 Fetch phase: one source page per tick, artist-name resolution for Tidal
+- [x] 2.3 Fetch phase: one source page per tick, artist-name resolution for Tidal
       sources, atomic cursor+rows persist, `total_tracks` on completion
-- [ ] 2.4 Match phase: cache→ISRC→fuzzy for spotify→tidal (write-back to
+- [x] 2.4 Match phase: cache→ISRC→fuzzy for spotify→tidal (write-back to
       `tracks`/`matches`); ISRC→fuzzy for tidal→spotify; `COPY_BATCH_ISRC`/
       `COPY_BATCH_FUZZY` budgets (default 2)
-- [ ] 2.5 Write phase: dest-create on first write, position-ordered capped batches,
+- [x] 2.5 Write phase: dest-create on first write, position-ordered capped batches,
       append dedup via `dest_known_ids`, single-statement written-flip,
       crash reconcile
-- [ ] 2.6 Terminal-state handling: completed / completed_with_unmatched / failed
+- [x] 2.6 Terminal-state handling: completed / completed_with_unmatched / failed
       with `error_code`; `finished_at` invariant; ntfy notification
-- [ ] 2.7 Wire `*/5 * * * *` into `wrangler.toml`; dispatch on `controller.cron` in
+- [x] 2.7 Wire `*/5 * * * *` into `wrangler.toml`; dispatch on `controller.cron` in
       `scheduled.ts`; prove sync crons unaffected
 
 ## 3. HTTP API
 
-- [ ] 3.1 `GET /api/copy/playlists` (both providers, pagination pass-through,
+- [x] 3.1 `GET /api/copy/playlists` (both providers, pagination pass-through,
       `spotify_reauth_required` gate)
-- [ ] 3.2 `POST /api/copy/jobs` (validation, append snapshot + size cap,
+- [x] 3.2 `POST /api/copy/jobs` (validation, append snapshot + size cap,
       single-active-job 409)
-- [ ] 3.3 `GET /api/copy/jobs`, `GET /api/copy/jobs/:id` (recomputed counters),
+- [x] 3.3 `GET /api/copy/jobs`, `GET /api/copy/jobs/:id` (recomputed counters),
       `GET /api/copy/jobs/:id/tracks` (state filter + paging)
-- [ ] 3.4 `POST /api/copy/jobs/:id/cancel`
-- [ ] 3.5 Manual resolution: `GET /api/copy/search` (rate-limited),
+- [x] 3.4 `POST /api/copy/jobs/:id/cancel`
+- [x] 3.5 Manual resolution: `GET /api/copy/search` (rate-limited),
       `POST .../tracks/:position/match` (validate + immediate append),
       `POST .../tracks/:position/skip`
-- [ ] 3.6 Confirm CF Access middleware covers all `/api/copy/*` routes (no
+- [x] 3.6 Confirm CF Access middleware covers all `/api/copy/*` routes (no
       skip-list changes) — negative test
 
 ## 4. Verification and close-out
