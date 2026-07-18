@@ -20,8 +20,16 @@ routes = [
 # Steady-state mode (2x daily UTC) per F-010. Backfill drained 2026-05-04 ~09:30 UTC
 # (truly_unprocessed = 0 via LEFT JOIN on tracks/matches/unmatched). Re-enable
 # */15 backfill if Liked Songs queue grows back into a backlog.
+#
+# F-030 (playlist-copy) D1: a third schedule drives runCopyTick — 288
+# invocations/day (0.3% of the request quota); the handler exits after one
+# Neon query when no copy_jobs row is active. scheduled.ts dispatches on
+# controller.cron: the two existing expressions keep calling runSync
+# unchanged. Workers free tier allows up to 5 cron schedules per account —
+# verify no other Worker on the account already uses the remaining slots
+# before deploying (design.md Risks).
 [triggers]
-crons = ["23 7 * * *", "23 19 * * *"]
+crons = ["23 7 * * *", "23 19 * * *", "*/5 * * * *"]
 
 [vars]
 TIDAL_COUNTRY_CODE = "RO"
@@ -40,6 +48,12 @@ UI_ORIGIN = "<YOUR_UI_ORIGIN>"
 # 12 h later). The queue drains more slowly, but every run completes.
 MATCH_BATCH_ISRC = "2"
 MATCH_BATCH_FUZZY = "2"
+
+# F-030: same free-tier conservatism for the copy-job engine's matching
+# phase (design.md D6). Defaults in src/copy/engine.ts are already 2 each;
+# set explicitly here for parity with MATCH_BATCH_* above.
+COPY_BATCH_ISRC = "2"
+COPY_BATCH_FUZZY = "2"
 
 
 # F-019: Cloudflare Access JWT validation. Both values are public — TEAM is
