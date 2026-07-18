@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Env } from "../../src/env";
-import { persistTokens, loadTokens, markRevoked } from "../../src/db/provider_tokens";
+import {
+  persistTokens,
+  loadTokens,
+  markRevoked,
+  hasSpotifyScopes,
+} from "../../src/db/provider_tokens";
 
 const TEST_KEY_B64 = btoa(String.fromCharCode(...new Array(32).fill(0x42)));
 
@@ -135,5 +140,149 @@ describe("markRevoked", () => {
     expect(sql.toLowerCase()).toContain("status");
     expect(sql.toLowerCase()).toContain("revoked");
     expect(params[0]).toBe("tidal");
+  });
+});
+
+// F-030 D8: granted `scope` string persisted alongside tokens.
+describe("persistTokens — scopes (F-030)", () => {
+  it("passes the scopes string as a query param when provided", async () => {
+    mockQuery.mockResolvedValueOnce([]);
+    const env = makeEnv();
+    await persistTokens(
+      env,
+      "spotify",
+      "at",
+      "rt",
+      new Date("2026-12-31T00:00:00Z"),
+      "user-library-read playlist-read-private playlist-modify-private",
+    );
+
+    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(sql.toLowerCase()).toContain("scopes");
+    expect(params).toContain(
+      "user-library-read playlist-read-private playlist-modify-private",
+    );
+  });
+
+  it("persists NULL scopes when omitted (existing tidal call sites unaffected)", async () => {
+    mockQuery.mockResolvedValueOnce([]);
+    const env = makeEnv();
+    await persistTokens(env, "tidal", "at", "rt", new Date());
+
+    const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+    expect(params).toContain(null);
+  });
+});
+
+describe("loadTokens — scopes (F-030)", () => {
+  it("returns the stored scopes string", async () => {
+    const env = makeEnv();
+    const { encryptToken } = await import("../../src/crypto");
+    const { ciphertext: atCt, iv: atIv } = await encryptToken("at", TEST_KEY_B64);
+    const { ciphertext: rtCt, iv: rtIv } = await encryptToken("rt", TEST_KEY_B64);
+
+    mockQuery.mockResolvedValueOnce([{
+      access_token_ciphertext: Buffer.from(atCt),
+      access_token_iv: Buffer.from(atIv),
+      refresh_token_ciphertext: Buffer.from(rtCt),
+      refresh_token_iv: Buffer.from(rtIv),
+      expires_at: new Date(),
+      status: "active",
+      scopes: "user-library-read playlist-read-private",
+    }]);
+
+    const result = await loadTokens(env, "spotify");
+    expect(result!.scopes).toBe("user-library-read playlist-read-private");
+  });
+
+  it("returns null scopes when the column is NULL", async () => {
+    const env = makeEnv();
+    const { encryptToken } = await import("../../src/crypto");
+    const { ciphertext: atCt, iv: atIv } = await encryptToken("at", TEST_KEY_B64);
+    const { ciphertext: rtCt, iv: rtIv } = await encryptToken("rt", TEST_KEY_B64);
+
+    mockQuery.mockResolvedValueOnce([{
+      access_token_ciphertext: Buffer.from(atCt),
+      access_token_iv: Buffer.from(atIv),
+      refresh_token_ciphertext: Buffer.from(rtCt),
+      refresh_token_iv: Buffer.from(rtIv),
+      expires_at: new Date(),
+      status: "active",
+      scopes: null,
+    }]);
+
+    const result = await loadTokens(env, "spotify");
+    expect(result!.scopes).toBeNull();
+  });
+});
+
+describe("hasSpotifyScopes (F-030 D8)", () => {
+  it("returns false when no tokens are stored", async () => {
+    mockQuery.mockResolvedValueOnce([]);
+    const result = await hasSpotifyScopes(makeEnv(), ["playlist-read-private"]);
+    expect(result).toBe(false);
+  });
+
+  it("returns false when scopes column is NULL", async () => {
+    const env = makeEnv();
+    const { encryptToken } = await import("../../src/crypto");
+    const { ciphertext: atCt, iv: atIv } = await encryptToken("at", TEST_KEY_B64);
+    const { ciphertext: rtCt, iv: rtIv } = await encryptToken("rt", TEST_KEY_B64);
+    mockQuery.mockResolvedValueOnce([{
+      access_token_ciphertext: Buffer.from(atCt),
+      access_token_iv: Buffer.from(atIv),
+      refresh_token_ciphertext: Buffer.from(rtCt),
+      refresh_token_iv: Buffer.from(rtIv),
+      expires_at: new Date(),
+      status: "active",
+      scopes: null,
+    }]);
+
+    const result = await hasSpotifyScopes(env, ["playlist-read-private"]);
+    expect(result).toBe(false);
+  });
+
+  it("returns false when a required scope is missing from the stored grant", async () => {
+    const env = makeEnv();
+    const { encryptToken } = await import("../../src/crypto");
+    const { ciphertext: atCt, iv: atIv } = await encryptToken("at", TEST_KEY_B64);
+    const { ciphertext: rtCt, iv: rtIv } = await encryptToken("rt", TEST_KEY_B64);
+    mockQuery.mockResolvedValueOnce([{
+      access_token_ciphertext: Buffer.from(atCt),
+      access_token_iv: Buffer.from(atIv),
+      refresh_token_ciphertext: Buffer.from(rtCt),
+      refresh_token_iv: Buffer.from(rtIv),
+      expires_at: new Date(),
+      status: "active",
+      scopes: "user-library-read",
+    }]);
+
+    const result = await hasSpotifyScopes(env, [
+      "user-library-read",
+      "playlist-modify-private",
+    ]);
+    expect(result).toBe(false);
+  });
+
+  it("returns true when all required scopes are present in the stored grant", async () => {
+    const env = makeEnv();
+    const { encryptToken } = await import("../../src/crypto");
+    const { ciphertext: atCt, iv: atIv } = await encryptToken("at", TEST_KEY_B64);
+    const { ciphertext: rtCt, iv: rtIv } = await encryptToken("rt", TEST_KEY_B64);
+    mockQuery.mockResolvedValueOnce([{
+      access_token_ciphertext: Buffer.from(atCt),
+      access_token_iv: Buffer.from(atIv),
+      refresh_token_ciphertext: Buffer.from(rtCt),
+      refresh_token_iv: Buffer.from(rtIv),
+      expires_at: new Date(),
+      status: "active",
+      scopes: "user-library-read playlist-read-private playlist-modify-private",
+    }]);
+
+    const result = await hasSpotifyScopes(env, [
+      "playlist-read-private",
+      "playlist-modify-private",
+    ]);
+    expect(result).toBe(true);
   });
 });

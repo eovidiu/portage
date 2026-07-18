@@ -84,7 +84,9 @@ describe("GET /auth/spotify — initiate (T-002-01)", () => {
     expect(url.searchParams.get("redirect_uri")).toBe(
       "https://example.com/auth/spotify/callback",
     );
-    expect(url.searchParams.get("scope")).toBe("user-library-read");
+    expect(url.searchParams.get("scope")).toBe(
+      "user-library-read playlist-read-private playlist-modify-private",
+    );
     expect(url.searchParams.get("response_type")).toBe("code");
     expect(url.searchParams.get("state")).toBeTruthy();
     expect(url.searchParams.get("code_challenge")).toBeTruthy();
