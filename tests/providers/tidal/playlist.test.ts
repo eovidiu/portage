@@ -129,7 +129,7 @@ describe("getPlaylistTracks", () => {
     mockTidalFetch.mockResolvedValueOnce(
       ok({
         included: [{ id: "T1" }, { id: "T2" }],
-        meta: { cursor: null },
+        links: { self: "https://openapi.tidal.com/v2/playlists/PL1/relationships/items" },
       }),
     );
     const page = await getPlaylistTracks(makeEnv(), "PL1");
@@ -140,23 +140,25 @@ describe("getPlaylistTracks", () => {
 
   it("falls back to data field", async () => {
     mockTidalFetch.mockResolvedValueOnce(
-      ok({ data: [{ id: "T3" }], meta: {} }),
+      ok({ data: [{ id: "T3" }] }),
     );
     const page = await getPlaylistTracks(makeEnv(), "PL1");
     expect(page.trackIds).toEqual(["T3"]);
   });
 
   it("returns empty trackIds when neither included nor data present", async () => {
-    mockTidalFetch.mockResolvedValueOnce(ok({ meta: {} }));
+    mockTidalFetch.mockResolvedValueOnce(ok({}));
     const page = await getPlaylistTracks(makeEnv(), "PL1");
     expect(page.trackIds).toHaveLength(0);
   });
 
-  it("hasMore=true when cursor is present", async () => {
+  // OAS-grounded: Links_Meta.nextCursor ("Only cursor part of next link") lives
+  // at links.meta.nextCursor, not a top-level `meta.cursor` (openapi-types.ts:19953-19959).
+  it("hasMore=true when links.meta.nextCursor is present", async () => {
     mockTidalFetch.mockResolvedValueOnce(
       ok({
         included: [{ id: "T1" }],
-        meta: { cursor: "abc123" },
+        links: { next: "https://openapi.tidal.com/v2/playlists/PL1/relationships/items?page[cursor]=abc123", meta: { nextCursor: "abc123" } },
       }),
     );
     const page = await getPlaylistTracks(makeEnv(), "PL1");
@@ -165,26 +167,81 @@ describe("getPlaylistTracks", () => {
   });
 
   it("passes cursor as query param on subsequent page", async () => {
-    mockTidalFetch.mockResolvedValueOnce(ok({ included: [], meta: {} }));
+    mockTidalFetch.mockResolvedValueOnce(ok({ included: [] }));
     await getPlaylistTracks(makeEnv(), "PL1", "cursor_abc");
     const url: string = mockTidalFetch.mock.calls[0][1];
     expect(url).toContain("cursor_abc");
   });
 });
 
+// F-030 task 1.3: getPlaylistTracks previously read a non-existent top-level
+// `json.meta.cursor` (openapi-types.ts has no such field on
+// Playlists_Items_Multi_Relationship_Data_Document — the only `cursor` field
+// in the whole OAS is `Links_Meta.nextCursor`, nested under `links.meta`).
+// Cursor never advanced, so a multi-page playlist would refetch page 1
+// forever. This test drives page-to-page via the returned cursor and asserts
+// the actual `page[cursor]` value sent on each request.
+describe("getPlaylistTracks — multi-page cursor advancement (OAS-correct)", () => {
+  it("advances through distinct cursors from links.meta.nextCursor and terminates on the last page", async () => {
+    mockTidalFetch
+      .mockResolvedValueOnce(
+        ok({
+          included: [{ id: "T1" }],
+          links: {
+            next: "https://openapi.tidal.com/v2/playlists/PL1/relationships/items?page[cursor]=cursor1",
+            meta: { nextCursor: "cursor1" },
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        ok({
+          included: [{ id: "T2" }],
+          links: {
+            next: "https://openapi.tidal.com/v2/playlists/PL1/relationships/items?page[cursor]=cursor2",
+            meta: { nextCursor: "cursor2" },
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        ok({
+          included: [{ id: "T3" }],
+          links: { self: "https://openapi.tidal.com/v2/playlists/PL1/relationships/items" },
+        }),
+      );
+
+    const page1 = await getPlaylistTracks(makeEnv(), "PL1");
+    expect(page1.trackIds).toEqual(["T1"]);
+    expect(page1.hasMore).toBe(true);
+    expect(page1.cursor).toBe("cursor1");
+
+    const page2 = await getPlaylistTracks(makeEnv(), "PL1", page1.cursor);
+    expect(mockTidalFetch.mock.calls[1][1]).toContain("page[cursor]=cursor1");
+    expect(page2.trackIds).toEqual(["T2"]);
+    expect(page2.hasMore).toBe(true);
+    expect(page2.cursor).toBe("cursor2");
+
+    const page3 = await getPlaylistTracks(makeEnv(), "PL1", page2.cursor);
+    expect(mockTidalFetch.mock.calls[2][1]).toContain("page[cursor]=cursor2");
+    expect(page3.trackIds).toEqual(["T3"]);
+    expect(page3.hasMore).toBe(false);
+    expect(page3.cursor).toBeNull();
+  });
+});
+
 describe("getAllPlaylistTrackIds", () => {
   it("aggregates all pages into a Set", async () => {
     mockTidalFetch
-      .mockResolvedValueOnce(ok({ included: [{ id: "T1" }, { id: "T2" }], meta: { cursor: "next" } }))
-      .mockResolvedValueOnce(ok({ included: [{ id: "T3" }], meta: {} }));
+      .mockResolvedValueOnce(ok({ included: [{ id: "T1" }, { id: "T2" }], links: { meta: { nextCursor: "next" } } }))
+      .mockResolvedValueOnce(ok({ included: [{ id: "T3" }] }));
 
     const ids = await getAllPlaylistTrackIds(makeEnv(), "PL1");
     expect(ids).toEqual(new Set(["T1", "T2", "T3"]));
     expect(mockTidalFetch).toHaveBeenCalledTimes(2);
+    expect(mockTidalFetch.mock.calls[1][1]).toContain("page[cursor]=next");
   });
 
   it("returns empty set for empty playlist", async () => {
-    mockTidalFetch.mockResolvedValueOnce(ok({ included: [], meta: {} }));
+    mockTidalFetch.mockResolvedValueOnce(ok({ included: [] }));
     const ids = await getAllPlaylistTrackIds(makeEnv(), "PL1");
     expect(ids.size).toBe(0);
   });
@@ -351,14 +408,14 @@ describe("addTracksToPlaylist — request body shape (OAS-grounded)", () => {
 
 describe("getPlaylistTracks — URL shape (OAS-grounded)", () => {
   it("does NOT pass an undocumented `limit` query parameter", async () => {
-    mockTidalFetch.mockResolvedValueOnce(ok({ included: [], meta: {} }));
+    mockTidalFetch.mockResolvedValueOnce(ok({ included: [] }));
     await getPlaylistTracks(makeEnv(), "PL1");
     const url: string = mockTidalFetch.mock.calls[0][1];
     expect(url).not.toMatch(/[?&]limit=/);
   });
 
   it("uses page[cursor] for pagination (the documented query param)", async () => {
-    mockTidalFetch.mockResolvedValueOnce(ok({ included: [], meta: {} }));
+    mockTidalFetch.mockResolvedValueOnce(ok({ included: [] }));
     await getPlaylistTracks(makeEnv(), "PL1", "cursor_xyz");
     const url: string = mockTidalFetch.mock.calls[0][1];
     expect(url).toContain("page[cursor]=cursor_xyz");

@@ -25,3 +25,9 @@ export function playlistUrl(playlistId: string): string {
 export function playlistTracksUrl(playlistId: string): string {
   return `${TIDAL_PLAYLISTS_URL}/${playlistId}/relationships/items`;
 }
+
+// Verified: 2026-07-18 against tidal-api-oas.json path /artists GET —
+// `filter[id]` is `array(string)`, no documented style/explode override, so
+// the OpenAPI default (form, explode=true) applies: repeated `filter[id]=`
+// query params, not a comma-joined list.
+export const TIDAL_ARTISTS_URL = "https://openapi.tidal.com/v2/artists";

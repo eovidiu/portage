@@ -87,13 +87,16 @@ export async function getPlaylistTracks(
   const json = (await response.json()) as {
     data?: Array<{ id: string }>;
     included?: Array<{ id: string }>;
-    meta?: { cursor?: string };
-    links?: { next?: string };
+    // Verified: 2026-07-18 against openapi-types.ts:19939-19959 (Links,
+    // Links_Meta) — the only `cursor` field in the whole OAS is
+    // `links.meta.nextCursor` ("Only cursor part of next link"); there is no
+    // top-level `meta.cursor`.
+    links?: { meta?: { nextCursor?: string } };
   };
   const items = json.included ?? json.data ?? [];
   const trackIds = items.map((i) => i.id);
-  const nextCursor = json.meta?.cursor ?? null;
-  const hasMore = nextCursor !== null || (json.links?.next !== undefined);
+  const nextCursor = json.links?.meta?.nextCursor ?? null;
+  const hasMore = nextCursor !== null;
   return { trackIds, hasMore, cursor: nextCursor };
 }
 
