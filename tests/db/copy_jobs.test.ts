@@ -15,6 +15,7 @@ import {
   setDestPlaylist,
   setStatus,
   recomputeCounters,
+  countSkipped,
   NON_TERMINAL_STATUSES,
   type CopyJobRow,
 } from "../../src/db/copy_jobs";
@@ -220,5 +221,22 @@ describe("recomputeCounters", () => {
     mockSql.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
     const result = await recomputeCounters(mockEnv, "job-1");
     expect(result).toEqual({ fetched: 0, matched: 0, written: 0, unmatched: 0 });
+  });
+});
+
+describe("countSkipped", () => {
+  it("returns the count of skipped rows for a job (not a persisted job counter)", async () => {
+    mockSql.mockResolvedValueOnce([{ n: 2 }]);
+    const result = await countSkipped(mockEnv, "job-1");
+    expect(result).toBe(2);
+    const [query, params] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(query).toContain("state = 'skipped'");
+    expect(params).toEqual(["job-1"]);
+  });
+
+  it("returns 0 when there are no skipped rows", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    const result = await countSkipped(mockEnv, "job-1");
+    expect(result).toBe(0);
   });
 });

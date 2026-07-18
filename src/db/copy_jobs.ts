@@ -200,3 +200,16 @@ export async function recomputeCounters(env: Env, jobId: string): Promise<JobCou
 
   return { fetched, matched, written, unmatched };
 }
+
+/**
+ * Count of `skipped` rows (e.g. append-mode dedup) — not one of copy_jobs'
+ * persisted counters, queried on demand for the D10 terminal notification.
+ */
+export async function countSkipped(env: Env, jobId: string): Promise<number> {
+  const sql = neon(env.DATABASE_URL);
+  const rows = await sql(
+    `SELECT COUNT(*)::integer AS n FROM copy_job_tracks WHERE job_id = $1 AND state = 'skipped'`,
+    [jobId],
+  );
+  return (rows as Array<{ n: number }>)[0]?.n ?? 0;
+}
