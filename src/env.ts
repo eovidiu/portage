@@ -40,4 +40,8 @@ export interface Env {
   NTFY_URL?: string;
   /** Optional ntfy access token, sent as `Authorization: Bearer`. Worker secret. (F-029) */
   NTFY_TOKEN?: string;
+  /** Per-tick ISRC match batch size for the copy-job engine. Defaults to 2. (F-030) */
+  COPY_BATCH_ISRC?: string;
+  /** Per-tick fuzzy match batch size for the copy-job engine. Defaults to 2. (F-030) */
+  COPY_BATCH_FUZZY?: string;
 }
