@@ -2,7 +2,15 @@
 
 import { Hono } from "hono";
 import type { Env } from "../../env";
-import { createJob, loadActiveJob, getJob, listJobs, cancelJob, recomputeCounters } from "../../db/copy_jobs";
+import {
+  createJob,
+  loadActiveJob,
+  getJob,
+  listJobs,
+  cancelJob,
+  recomputeCounters,
+  recomputeCountersForJobs,
+} from "../../db/copy_jobs";
 import { listTracksPage, type CopyTrackState } from "../../db/copy_job_tracks";
 import { hasSpotifyScopes } from "../../db/provider_tokens";
 import { findOwnPlaylist, resolveSourceName, directionFor, destProviderFor, type CopyProvider } from "./shared";
@@ -129,7 +137,14 @@ app.get("/jobs", async (c) => {
   const rawLimit = parseInt(c.req.query("limit") ?? String(DEFAULT_JOBS_LIMIT), 10);
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : DEFAULT_JOBS_LIMIT;
   const jobs = await listJobs(c.env, limit);
-  return c.json({ jobs });
+  // F-030 review S3: freshen counters in one extra GROUP BY query covering
+  // every listed job (not one recomputeCounters call per job) so the list
+  // endpoint stays at exactly 2 DB queries total. A job with no tracks yet
+  // (e.g. still 'queued') is absent from the map — its own (zero) counters
+  // are correct as-is.
+  const counters = await recomputeCountersForJobs(c.env, jobs.map((j) => j.job_id));
+  const merged = jobs.map((j) => ({ ...j, ...counters.get(j.job_id) }));
+  return c.json({ jobs: merged });
 });
 
 app.get("/jobs/:job_id", async (c) => {
@@ -164,7 +179,13 @@ app.post("/jobs/:job_id/cancel", async (c) => {
   if (result === "already_terminal") return c.json({ error: "job_already_terminal" }, 409);
 
   const job = await getJob(c.env, jobId);
-  if (job) await notifyCopyJobTerminal(c.env, job);
+  if (job) {
+    // F-030 review N2: the row's own written/unmatched counters may be stale
+    // (recomputed lazily on read elsewhere — design.md D3/Risks); refresh
+    // them before the terminal notification so it doesn't under-report.
+    const counters = await recomputeCounters(c.env, jobId);
+    await notifyCopyJobTerminal(c.env, { ...job, ...counters });
+  }
   return c.json({ status: "cancelled" }, 200);
 });
 

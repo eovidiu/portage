@@ -12,6 +12,7 @@ vi.mock("../../../src/db/copy_jobs", () => ({
   listJobs: vi.fn(),
   cancelJob: vi.fn(),
   recomputeCounters: vi.fn(),
+  recomputeCountersForJobs: vi.fn(),
 }));
 vi.mock("../../../src/db/copy_job_tracks", () => ({ listTracksPage: vi.fn() }));
 vi.mock("../../../src/db/provider_tokens", () => ({ hasSpotifyScopes: vi.fn() }));
@@ -32,6 +33,7 @@ import {
   listJobs,
   cancelJob,
   recomputeCounters,
+  recomputeCountersForJobs,
 } from "../../../src/db/copy_jobs";
 import { listTracksPage } from "../../../src/db/copy_job_tracks";
 import { hasSpotifyScopes } from "../../../src/db/provider_tokens";
@@ -45,6 +47,7 @@ const mockGetJob = vi.mocked(getJob);
 const mockListJobs = vi.mocked(listJobs);
 const mockCancelJob = vi.mocked(cancelJob);
 const mockRecomputeCounters = vi.mocked(recomputeCounters);
+const mockRecomputeCountersForJobs = vi.mocked(recomputeCountersForJobs);
 const mockListTracksPage = vi.mocked(listTracksPage);
 const mockHasSpotifyScopes = vi.mocked(hasSpotifyScopes);
 const mockFindOwnPlaylist = vi.mocked(findOwnPlaylist);
@@ -134,6 +137,7 @@ async function doFetch(
 beforeEach(() => {
   vi.clearAllMocks();
   mockHasSpotifyScopes.mockResolvedValue(true);
+  mockRecomputeCountersForJobs.mockResolvedValue(new Map());
 });
 
 describe("POST /api/copy/jobs — new-playlist job (D9 scenario: New-playlist job created)", () => {
@@ -352,6 +356,28 @@ describe("GET /api/copy/jobs — flat newest-first list", () => {
     await doFetch("/api/copy/jobs?limit=5");
     expect(mockListJobs).toHaveBeenCalledWith(expect.anything(), 5);
   });
+
+  it("freshens counters via recomputeCountersForJobs in exactly 2 DB queries total (S3)", async () => {
+    mockListJobs.mockResolvedValueOnce([
+      makeJobRow({ job_id: "j1", written: 0, matched: 3 }),
+      makeJobRow({ job_id: "j2", written: 0, matched: 0 }),
+    ]);
+    mockRecomputeCountersForJobs.mockResolvedValueOnce(
+      new Map([["j1", { fetched: 5, matched: 0, written: 5, unmatched: 0 }]]),
+    );
+
+    const res = await doFetch("/api/copy/jobs");
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { jobs: Array<{ job_id: string; written: number }> };
+    // j1's stale written=0 is refreshed to the recomputed value.
+    expect(body.jobs.find((j) => j.job_id === "j1")?.written).toBe(5);
+    // j2 has no rows yet (absent from the map) — its own (zero) counters stand.
+    expect(body.jobs.find((j) => j.job_id === "j2")?.written).toBe(0);
+    expect(mockRecomputeCountersForJobs).toHaveBeenCalledWith(expect.anything(), ["j1", "j2"]);
+    expect(mockListJobs).toHaveBeenCalledOnce();
+    expect(mockRecomputeCountersForJobs).toHaveBeenCalledOnce();
+  });
 });
 
 describe("GET /api/copy/jobs/:job_id — recomputed counters", () => {
@@ -426,6 +452,22 @@ describe("POST /api/copy/jobs/:job_id/cancel", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ status: "cancelled" });
     expect(mockNotifyCopyJobTerminal).toHaveBeenCalledOnce();
+  });
+
+  it("recomputes counters before notifying, so a stale written count isn't reported (N2)", async () => {
+    mockCancelJob.mockResolvedValueOnce("cancelled");
+    mockGetJob.mockResolvedValueOnce(
+      makeJobRow({ status: "cancelled", finished_at: "2026-07-18T00:05:00Z", written: 0 }),
+    );
+    mockRecomputeCounters.mockResolvedValueOnce({ fetched: 5, matched: 0, written: 3, unmatched: 2 });
+
+    await doFetch("/api/copy/jobs/job-1/cancel", { method: "POST", body: {} });
+
+    expect(mockRecomputeCounters).toHaveBeenCalledWith(expect.anything(), "job-1");
+    expect(mockNotifyCopyJobTerminal).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ written: 3, unmatched: 2 }),
+    );
   });
 
   it("returns 409 when the job is already terminal", async () => {
