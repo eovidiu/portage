@@ -69,6 +69,8 @@ Shipped OpenSpec features at time of writing:
 | F-027a | Persisted fuzzy candidates + manual-match `sync_run_id` | `openspec/changes/archive/2026-05-17-pick-from-fuzzy-candidates/` |
 | F-028 | Flexible fuzzy matching algorithm | `openspec/changes/archive/2026-07-12-flexible-fuzzy-matching/` |
 | F-029 | ntfy push notifications for sync runs | `openspec/changes/archive/2026-07-12-f-029-ntfy-notifications/` |
+| F-030 | Bidirectional one-shot playlist copy (engine + `/api/copy/*`) | `openspec/changes/playlist-copy/` |
+| F-031 | Copy page UI (source/destination pickers, job progress, manual resolution) | `openspec/changes/playlist-copy/design.md` D9 contract; UI change lives in the portage-ui repo |
 
 If you're looking for the spec for any feature ≥ F-019, search
 `openspec/changes/archive/` rather than `docs/specs/`.

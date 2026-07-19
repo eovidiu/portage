@@ -36,6 +36,12 @@ jobs:
         # is missing Linux-only optional deps for native modules.
         run: npm install --no-audit --no-fund
 
+      - name: Provision wrangler.toml for the test pool
+        # wrangler.toml is untracked (operator-specific; template at
+        # wrangler.toml.example). @cloudflare/vitest-pool-workers requires it
+        # to exist, so CI runs against the example's placeholder values.
+        run: cp wrangler.toml.example wrangler.toml
+
       - name: Typecheck
         run: npm run typecheck
 

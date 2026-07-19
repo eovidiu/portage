@@ -53,6 +53,19 @@ before deploying.
   the rollback path.
 - Schema is current: `db/schema.sql` re-applied if the release notes
   mention schema changes.
+- Playlist copy (F-030) preconditions:
+  - `wrangler.toml` `crons` includes `*/5 * * * *` (copy-engine tick) and
+    `[vars]` sets `COPY_BATCH_ISRC` + `COPY_BATCH_FUZZY`.
+  - The Cloudflare account has a free cron-schedule slot available
+    (free tier allows 5; portage now uses 3).
+  - After the first deploy with the widened Spotify scope set: re-run the
+    Spotify OAuth dance via `/auth/spotify` and verify the stored grant —
+    `provider_tokens.scopes` for `spotify` must contain
+    `playlist-read-private` and `playlist-modify-private`. Until then,
+    `/api/copy/playlists?provider=spotify` intentionally returns
+    `409 spotify_reauth_required`. (Whether re-consent alone suffices
+    without a Spotify dashboard change is unverified in docs — this live
+    check is the verification.)
 
 ## Deploy + verify
 

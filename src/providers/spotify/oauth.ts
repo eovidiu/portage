@@ -2,6 +2,7 @@
 import type { Env } from "../../env";
 import { persistTokens, loadTokens, markRevoked } from "../../db/provider_tokens";
 import { storeOAuthState, consumeOAuthState, purgeExpiredOAuthState } from "../../db/oauth_state";
+import { SPOTIFY_SCOPES } from "./scopes";
 
 export class SpotifyAuthError extends Error {
   constructor(
@@ -68,7 +69,7 @@ export async function initiateSpotifyOAuth(env: Env): Promise<InitiateResult> {
   const params = new URLSearchParams({
     client_id: env.SPOTIFY_CLIENT_ID,
     redirect_uri: env.SPOTIFY_REDIRECT_URI,
-    scope: "user-library-read",
+    scope: SPOTIFY_SCOPES,
     response_type: "code",
     state,
     code_challenge: codeChallenge,
@@ -135,10 +136,18 @@ export async function handleCallback(
     refresh_token: string;
     expires_in: number;
     token_type: string;
+    scope?: string;
   };
 
   const expiresAt = new Date(Date.now() + data.expires_in * 1000);
-  await persistTokens(env, "spotify", data.access_token, data.refresh_token, expiresAt);
+  await persistTokens(
+    env,
+    "spotify",
+    data.access_token,
+    data.refresh_token,
+    expiresAt,
+    data.scope ?? null,
+  );
 }
 
 async function _doRefresh(env: Env): Promise<void> {
@@ -174,11 +183,15 @@ async function _doRefresh(env: Env): Promise<void> {
     access_token: string;
     refresh_token?: string;
     expires_in: number;
+    scope?: string;
   };
 
   const newRefreshToken = data.refresh_token ?? tokens.refreshToken; // R8
   const expiresAt = new Date(Date.now() + data.expires_in * 1000);
-  await persistTokens(env, "spotify", data.access_token, newRefreshToken, expiresAt);
+  // F-030 D8: Spotify omits `scope` on refresh when unchanged (RFC 6749 5.1);
+  // fall back to the previously stored grant instead of overwriting with null.
+  const scopes = data.scope ?? tokens.scopes ?? null;
+  await persistTokens(env, "spotify", data.access_token, newRefreshToken, expiresAt, scopes);
 }
 
 // R7: coalesced refresh — checks Map first, reuses in-flight promise if present

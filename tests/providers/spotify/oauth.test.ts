@@ -130,7 +130,9 @@ describe("initiateSpotifyOAuth — authorize URL (T-002-01)", () => {
     const url = new URL(result.authorizeUrl);
     expect(url.searchParams.get("client_id")).toBe("test-spotify-client-id");
     expect(url.searchParams.get("redirect_uri")).toBe("https://example.com/auth/spotify/callback");
-    expect(url.searchParams.get("scope")).toBe("user-library-read");
+    expect(url.searchParams.get("scope")).toBe(
+      "user-library-read playlist-read-private playlist-modify-private",
+    );
     expect(url.searchParams.get("response_type")).toBe("code");
     expect(url.searchParams.get("state")).toBeTruthy();
     expect(url.searchParams.get("code_challenge")).toBeTruthy();
@@ -254,6 +256,143 @@ describe("handleCallback — success (T-002-08 + T-002-09)", () => {
     );
     const env = makeEnv();
     await expect(handleCallback(env, { code: "c", state: "s" })).resolves.toBeUndefined();
+  });
+});
+
+// F-030 D8: granted `scope` string persisted on exchange
+describe("handleCallback — scope persistence (F-030)", () => {
+  it("persists the response's scope string to provider_tokens.scopes", async () => {
+    mockConsumeOAuthState.mockResolvedValue({ codeVerifier: "verifier" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            access_token: "at",
+            refresh_token: "rt",
+            expires_in: 3600,
+            token_type: "Bearer",
+            scope: "user-library-read playlist-read-private playlist-modify-private",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const env = makeEnv();
+    await handleCallback(env, { code: "c", state: "s" });
+
+    expect(mockPersistTokens).toHaveBeenCalledWith(
+      env,
+      "spotify",
+      "at",
+      "rt",
+      expect.any(Date),
+      "user-library-read playlist-read-private playlist-modify-private",
+    );
+  });
+
+  it("persists null scopes when the exchange response omits scope", async () => {
+    mockConsumeOAuthState.mockResolvedValue({ codeVerifier: "verifier" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            access_token: "at",
+            refresh_token: "rt",
+            expires_in: 3600,
+            token_type: "Bearer",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const env = makeEnv();
+    await handleCallback(env, { code: "c", state: "s" });
+
+    expect(mockPersistTokens).toHaveBeenCalledWith(
+      env,
+      "spotify",
+      "at",
+      "rt",
+      expect.any(Date),
+      null,
+    );
+  });
+});
+
+// F-030 D8: granted `scope` string persisted on refresh, preserved when Spotify
+// omits it from the refresh response (RFC 6749 5.1: scope is optional when unchanged)
+describe("ensureFreshToken — scope persistence on refresh (F-030)", () => {
+  it("persists the refresh response's scope string when present", async () => {
+    const nearExpiry = new Date(Date.now() + 30 * 1000);
+    mockLoadTokens.mockResolvedValue({
+      accessToken: "AT",
+      refreshToken: "RT",
+      expiresAt: nearExpiry,
+      status: "active",
+      scopes: "user-library-read",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            access_token: "NEW_AT",
+            refresh_token: "NEW_RT",
+            expires_in: 3600,
+            scope: "user-library-read playlist-read-private playlist-modify-private",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const env = makeEnv();
+    await refreshSpotify(env);
+
+    expect(mockPersistTokens).toHaveBeenCalledWith(
+      env,
+      "spotify",
+      "NEW_AT",
+      "NEW_RT",
+      expect.any(Date),
+      "user-library-read playlist-read-private playlist-modify-private",
+    );
+  });
+
+  it("preserves the previously stored scopes when the refresh response omits scope", async () => {
+    const nearExpiry = new Date(Date.now() + 30 * 1000);
+    mockLoadTokens.mockResolvedValue({
+      accessToken: "AT",
+      refreshToken: "RT",
+      expiresAt: nearExpiry,
+      status: "active",
+      scopes: "user-library-read playlist-read-private playlist-modify-private",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            access_token: "NEW_AT",
+            refresh_token: "NEW_RT",
+            expires_in: 3600,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+    const env = makeEnv();
+    await refreshSpotify(env);
+
+    expect(mockPersistTokens).toHaveBeenCalledWith(
+      env,
+      "spotify",
+      "NEW_AT",
+      "NEW_RT",
+      expect.any(Date),
+      "user-library-read playlist-read-private playlist-modify-private",
+    );
   });
 });
 

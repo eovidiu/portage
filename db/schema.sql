@@ -1,5 +1,6 @@
 -- Source of truth for portage schema. Apply via Neon MCP or psql.
--- Last applied to project square-wave-04443485 on 2026-04-26 (added idx_tracks_added_at).
+-- Last applied to project square-wave-04443485 on 2026-07-19 (F-030: copy_jobs,
+-- copy_job_tracks, provider_tokens.scopes, idx_copy_jobs_single_active).
 --
 -- Invariants (application-layer enforcement — not DB CHECKs):
 --   I-001: tracks.spotify_id MUST appear in exactly one of matches OR unmatched at any time,
@@ -158,6 +159,87 @@ CREATE INDEX IF NOT EXISTS idx_membership_unsynced
 -- every playlist it belongs to (future use).
 CREATE INDEX IF NOT EXISTS idx_membership_track
     ON playlist_membership (spotify_track_id);
+
+-- F-030: granted OAuth scopes as returned by the provider's token endpoint.
+-- NULL means the row predates the column; copy endpoints treat NULL as
+-- "new scopes not granted" and return spotify_reauth_required.
+ALTER TABLE provider_tokens ADD COLUMN IF NOT EXISTS scopes TEXT;
+
+-- F-030: one-shot playlist copy jobs. Self-contained by design — the sync
+-- tables (matches/unmatched) are keyed by spotify_id and cannot represent the
+-- tidal_to_spotify direction. Terminal statuses MUST have non-null finished_at
+-- (mirrors I-004).
+CREATE TABLE IF NOT EXISTS copy_jobs (
+    job_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    direction           TEXT NOT NULL
+                        CHECK (direction IN ('spotify_to_tidal','tidal_to_spotify')),
+    source_playlist_id  TEXT NOT NULL,
+    source_name         TEXT NOT NULL,
+    dest_mode           TEXT NOT NULL CHECK (dest_mode IN ('new','append')),
+    dest_playlist_id    TEXT,
+    dest_name           TEXT,
+    status              TEXT NOT NULL DEFAULT 'queued'
+                        CHECK (status IN ('queued','fetching','matching','writing',
+                                          'completed','completed_with_unmatched',
+                                          'failed','cancelled')),
+    error_code          TEXT,
+    fetch_cursor        TEXT,
+    dest_known_ids      JSONB,
+    total_tracks        INT,
+    fetched             INT NOT NULL DEFAULT 0,
+    matched             INT NOT NULL DEFAULT 0,
+    written             INT NOT NULL DEFAULT 0,
+    unmatched           INT NOT NULL DEFAULT 0,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at         TIMESTAMPTZ
+);
+-- F-030 review B1: batch-in-flight marker for the write phase's count-based
+-- crash reconcile. Holds the source-track positions of a batch that was
+-- persisted BEFORE the provider add() call; cleared atomically (same
+-- transaction as the state='written' flip) once the batch resolves. A
+-- non-null value on job load means the previous tick may have died between
+-- the add() call and the flip, so the next tick must reconcile via
+-- readDestItemCount before selecting a new batch.
+ALTER TABLE copy_jobs ADD COLUMN IF NOT EXISTS write_batch_positions JSONB;
+-- F-030 review B3: consecutive non-fatal tick errors. Reset to 0 on any
+-- successful tick; at 5 the job is failed with error_code 'tick_error_streak'
+-- so a persistently-erroring job doesn't retry forever and block the
+-- single-active-job slot.
+ALTER TABLE copy_jobs ADD COLUMN IF NOT EXISTS consecutive_errors INT NOT NULL DEFAULT 0;
+-- Partial UNIQUE index: at most one non-terminal job may exist. The insert
+-- in createJob maps a 23505 violation to the API's 409 job_already_active,
+-- closing the check-then-insert race on concurrent POST /api/copy/jobs.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_copy_jobs_single_active
+    ON copy_jobs ((true))
+    WHERE status IN ('queued','fetching','matching','writing');
+
+-- F-030: per-track copy state. position preserves source playlist order and is
+-- the stable per-job key (source_track_id can repeat if a playlist holds
+-- duplicates). candidates carries top-3 picks on fuzzy rejection, like
+-- unmatched.candidates.
+CREATE TABLE IF NOT EXISTS copy_job_tracks (
+    job_id          UUID NOT NULL REFERENCES copy_jobs(job_id) ON DELETE CASCADE,
+    position        INT NOT NULL,
+    source_track_id TEXT NOT NULL,
+    isrc            TEXT,
+    title           TEXT NOT NULL,
+    artist          TEXT,
+    album           TEXT,
+    duration_ms     INT,
+    state           TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (state IN ('pending','matched','unmatched','skipped',
+                                     'written','write_failed')),
+    match_method    TEXT CHECK (match_method IN ('isrc','fuzzy','manual','cached')),
+    confidence      NUMERIC(3,2),
+    dest_track_id   TEXT,
+    candidates      JSONB,
+    reason          TEXT,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (job_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_copy_job_tracks_state
+    ON copy_job_tracks (job_id, state);
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_oauth_state_expires_at ON oauth_state(expires_at);

@@ -5,10 +5,16 @@ vi.mock("../src/sync/orchestrator", () => ({
   runSync: vi.fn(),
 }));
 
+vi.mock("../src/copy/engine", () => ({
+  runCopyTick: vi.fn(),
+}));
+
 import { scheduled } from "../src/scheduled";
 import { runSync } from "../src/sync/orchestrator";
+import { runCopyTick } from "../src/copy/engine";
 
 const mockRunSync = runSync as ReturnType<typeof vi.fn>;
+const mockRunCopyTick = runCopyTick as ReturnType<typeof vi.fn>;
 
 function makeEnv(): Env {
   return {
@@ -26,10 +32,10 @@ function makeEnv(): Env {
   };
 }
 
-function makeEvent(): ScheduledEvent {
+function makeEvent(cron: string = "23 7 * * *"): ScheduledEvent {
   return {
     scheduledTime: Date.now(),
-    cron: "23 7 * * *",
+    cron,
     noRetry: () => undefined,
     type: "scheduled",
     waitUntil: () => undefined,
@@ -150,5 +156,51 @@ describe("T-010-05: Orchestrator failure does not throw", () => {
     const completedLog = loggedEvents.find((e) => e.event === "scheduled_completed");
     expect(completedLog).toBeDefined();
     expect(completedLog.outcome).toBe("failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-030: dispatch on controller.cron — the copy-job schedule routes to
+// runCopyTick instead of runSync; the two original schedules are unaffected.
+// ---------------------------------------------------------------------------
+describe("F-030: copy-tick cron dispatch", () => {
+  it("calls runCopyTick (not runSync) when the copy-job cron fires", async () => {
+    mockRunCopyTick.mockResolvedValue({ outcome: "idle" });
+    const ctx = makeCtx();
+
+    await scheduled(makeEvent("*/5 * * * *"), makeEnv(), ctx);
+
+    expect(mockRunCopyTick).toHaveBeenCalledTimes(1);
+    expect(mockRunSync).not.toHaveBeenCalled();
+  });
+
+  it("calls runSync (not runCopyTick) for the 23:19 sync cron — sync crons unaffected", async () => {
+    mockRunSync.mockResolvedValue({ outcome: "succeeded", run_id: "r1" });
+    const ctx = makeCtx();
+
+    await scheduled(makeEvent("23 19 * * *"), makeEnv(), ctx);
+
+    expect(mockRunSync).toHaveBeenCalledTimes(1);
+    expect(mockRunCopyTick).not.toHaveBeenCalled();
+  });
+
+  it("does not throw when runCopyTick rejects", async () => {
+    mockRunCopyTick.mockRejectedValue(new Error("copy tick boom"));
+    const ctx = makeCtx();
+
+    await expect(scheduled(makeEvent("*/5 * * * *"), makeEnv(), ctx)).resolves.toBeUndefined();
+  });
+
+  it("passes the runCopyTick promise to ctx.waitUntil", async () => {
+    let resolveTick!: () => void;
+    const tickPromise = new Promise<void>((resolve) => { resolveTick = resolve; });
+    mockRunCopyTick.mockReturnValue(tickPromise);
+    const ctx = makeCtx();
+    const waitUntilMock = ctx.waitUntil as ReturnType<typeof vi.fn>;
+
+    await scheduled(makeEvent("*/5 * * * *"), makeEnv(), ctx);
+
+    expect(waitUntilMock).toHaveBeenCalledTimes(1);
+    resolveTick();
   });
 });

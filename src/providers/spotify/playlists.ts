@@ -29,6 +29,14 @@ const SPOTIFY_PLAYLIST_URL = "https://api.spotify.com/v1/playlists/";
 const SPOTIFY_PLAYLIST_TRACKS_URL_TEMPLATE = (id: string) =>
   `https://api.spotify.com/v1/playlists/${id}/tracks?limit=50`;
 
+// Path /v1/me/playlists. Limit max 50 (Spotify caps this endpoint below the
+// usual 100), offset paging. Uses the standard Spotify Paging Object envelope
+// (href, items[], limit, next, offset, previous, total) also seen on the
+// playlist-tracks endpoint above.
+// Verified: 2026-07-18 against https://developer.spotify.com/documentation/web-api/reference/get-a-list-of-current-users-playlists
+const SPOTIFY_ME_PLAYLISTS_URL = "https://api.spotify.com/v1/me/playlists";
+const ME_PLAYLISTS_PAGE_LIMIT = 50;
+
 const CLOCK_SKEW_MS = 60_000;
 
 interface PlaylistNameResponse {
@@ -42,7 +50,7 @@ export async function fetchSpotifyPlaylistName(
   env: Env,
   spotifyPlaylistId: string,
 ): Promise<string> {
-  const url = `${SPOTIFY_PLAYLIST_URL}${spotifyPlaylistId}?fields=name`;
+  const url = `${SPOTIFY_PLAYLIST_URL}${encodeURIComponent(spotifyPlaylistId)}?fields=name`;
   const response = await spotifyFetch(env, url);
 
   if (!response.ok) {
@@ -284,4 +292,69 @@ export async function fetchPlaylistTracks(
     tracksSkipped: totalSkipped,
     morePagesPending: !sweepComplete,
   };
+}
+
+// =============================================================================
+// listOwnPlaylists (F-030 task 1.6)
+// =============================================================================
+
+export interface SpotifyOwnPlaylist {
+  id: string;
+  name: string;
+  trackCount: number;
+}
+
+export interface ListOwnPlaylistsResult {
+  playlists: SpotifyOwnPlaylist[];
+  nextOffset: number | null;
+}
+
+interface MePlaylistsResponse {
+  items: Array<{ id: string; name: string; tracks?: { total?: number } }>;
+  next: string | null;
+}
+
+async function fetchMePlaylistsPage(env: Env, url: string): Promise<MePlaylistsResponse> {
+  const response = await spotifyFetch(env, url);
+
+  if (response.status === 429) {
+    const retryAfter = parseInt(response.headers.get("Retry-After") ?? "1", 10);
+    await new Promise((r) => setTimeout(r, retryAfter * 1000));
+
+    const retryResponse = await spotifyFetch(env, url);
+    if (retryResponse.status === 429) {
+      throw new Error("Spotify rate limit: second 429 received, aborting playlist list");
+    }
+    if (!retryResponse.ok) {
+      throw new Error(`Spotify API error on retry: ${retryResponse.status}`);
+    }
+    return retryResponse.json() as Promise<MePlaylistsResponse>;
+  }
+
+  if (!response.ok) {
+    throw new Error(`Spotify API error: ${response.status}`);
+  }
+
+  return response.json() as Promise<MePlaylistsResponse>;
+}
+
+// F-030 task 1.6: list the operator's own Spotify playlists, offset-paginated.
+// `nextOffset` mirrors the page envelope's `next` field so callers can page
+// without re-deriving state from `total` (which can go stale mid-listing).
+export async function listOwnPlaylists(
+  env: Env,
+  offset: number = 0,
+): Promise<ListOwnPlaylistsResult> {
+  const url = `${SPOTIFY_ME_PLAYLISTS_URL}?limit=${ME_PLAYLISTS_PAGE_LIMIT}&offset=${offset}`;
+  const page = await fetchMePlaylistsPage(env, url);
+
+  const playlists = page.items.map((item) => ({
+    id: item.id,
+    name: item.name,
+    trackCount: item.tracks?.total ?? 0,
+  }));
+
+  const nextOffset = page.next !== null ? offset + ME_PLAYLISTS_PAGE_LIMIT : null;
+
+  return { playlists, nextOffset };
 }
