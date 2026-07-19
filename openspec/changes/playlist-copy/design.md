@@ -175,15 +175,32 @@ playlist ≈ 5 fetch + 63 match + 13 write ticks ≈ 7 hours at `*/5` — within
 ### D7 — Write idempotency on crash
 
 Adding items is not idempotent on either provider (Spotify allows duplicates; Tidal
-too for UNLISTED playlists). Protocol: mark the batch's rows `state='writing'`… is
-not a state — instead, the tick re-checks before writing: it selects the next ≤N
-`matched` rows, writes them, then flips them to `written` in one statement. If the
-isolate dies between write and flip, the next tick re-reads the destination
-playlist's tail (1 subrequest) and reconciles: rows whose `dest_track_id` already
-appears are flipped to `written` without re-adding. The reconcile read happens only
-when the previous tick's batch is still `matched` but the job's `written` counter
-lags — a cheap, targeted check, not a full-playlist scan (append-mode's
-`dest_known_ids` plus written history reconstructs the expected tail).
+too for UNLISTED playlists). `copy_jobs.write_batch_positions` (JSONB) holds the
+source-track positions of the batch currently in flight: the tick persists this
+marker *before* calling the provider's add(), consumes the add() result (invalid
+ids → `write_failed`, permanent; a rate-limited/errored batch → left `matched` for
+retry — nothing was confirmed added), then flips the confirmed-added positions to
+`written` and clears the marker in the same resolution step
+(`resolveWriteBatch`).
+
+If the isolate dies between the add() call and that resolution, the marker survives
+(it isn't cleared until resolution). The next tick recognizes this — the same ≤N
+`matched` rows it would select next match the marker's positions — and reconciles
+via a single item-*count* read of the destination (`readDestItemCount`, 1
+subrequest) rather than the previous tail-page scan, which was blind to a crashed
+batch past page 1 on a multi-page destination:
+
+- `expectedPreWrite` = (append-mode's `dest_known_ids` snapshot size, else 0 for a
+  fresh destination) + the job's persisted `written` counter.
+- `actual == expectedPreWrite` → the add() never landed; retry it.
+- `actual == expectedPreWrite + batchSize` → it landed; flip to `written` without
+  re-adding.
+- any other count → unexpected (violates the one-HTTP-request-per-batch invariant,
+  or the destination was mutated externally mid-reconcile); conservatively treat as
+  landed rather than risk re-introducing the duplicate-add bug this fix closes.
+
+This is a targeted check on the one batch that might be in flight, not a
+full-playlist scan.
 
 ### D8 — Spotify scopes: centralize + detect stale grants
 
