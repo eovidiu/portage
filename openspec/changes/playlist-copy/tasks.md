@@ -56,8 +56,8 @@
 
 ## 4. Verification and close-out
 
-- [ ] 4.1 Full suite + typecheck green; coverage ≥95% on touched code
-- [ ] 4.2 Update `docs/README.md` feature map + pre-deploy checklist (Spotify
+- [x] 4.1 Full suite + typecheck green; coverage ≥95% on touched code
+- [x] 4.2 Update `docs/README.md` feature map + pre-deploy checklist (Spotify
       re-consent step, cron-slot check, scope-verification step)
 - [ ] 4.3 features.json: F-030 entry updates (test_file, coverage, status)
 - [ ] 4.4 Deploy + live validation per design Migration Plan (small playlist both
