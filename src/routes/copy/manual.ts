@@ -81,6 +81,33 @@ async function destinationExists(env: Env, direction: string, destTrackId: strin
   return res.ok;
 }
 
+// F-030 review N1: manual match is only meaningful for a track that hasn't
+// already been resolved one way or another — re-matching a 'written' or
+// 'matched' row would double-add it to the destination playlist.
+const REMATCHABLE_STATES = new Set(["unmatched", "skipped"]);
+
+/**
+ * Appends the single track to the destination and reports whether it
+ * actually landed (F-030 review N1). Both providers can return a
+ * result that isn't a thrown error yet isn't a success either — Tidal
+ * reports per-id `invalidIds`/`errors`, Spotify reports `rateLimited` — so
+ * the route must inspect the result rather than assume success from a
+ * non-throwing call.
+ */
+async function addSingleTrack(
+  env: Env,
+  direction: string,
+  destPlaylistId: string,
+  destTrackId: string,
+): Promise<boolean> {
+  if (direction === "spotify_to_tidal") {
+    const result = await addTracksToPlaylist(env, destPlaylistId, [destTrackId]);
+    return result.added === 1;
+  }
+  const result = await addItems(env, destPlaylistId, [destTrackId]);
+  return result.added === 1 && !result.rateLimited;
+}
+
 app.post("/jobs/:job_id/tracks/:position/match", async (c) => {
   const jobId = c.req.param("job_id");
   const position = parseInt(c.req.param("position"), 10);
@@ -91,6 +118,9 @@ app.post("/jobs/:job_id/tracks/:position/match", async (c) => {
 
   const track = await getTrack(c.env, jobId, position);
   if (!track) return c.json({ error: "track_not_found" }, 404);
+  if (!REMATCHABLE_STATES.has(track.state)) {
+    return c.json({ error: "track_not_eligible" }, 409);
+  }
 
   let body: unknown;
   try {
@@ -110,10 +140,8 @@ app.post("/jobs/:job_id/tracks/:position/match", async (c) => {
     return c.json({ error: "no_destination_playlist" }, 422);
   }
 
-  if (job.direction === "spotify_to_tidal") {
-    await addTracksToPlaylist(c.env, job.dest_playlist_id, [destTrackId]);
-  } else {
-    await addItems(c.env, job.dest_playlist_id, [destTrackId]);
+  if (!(await addSingleTrack(c.env, job.direction, job.dest_playlist_id, destTrackId))) {
+    return c.json({ error: "dest_add_failed" }, 502);
   }
 
   await updateTrackMatch(c.env, jobId, position, {

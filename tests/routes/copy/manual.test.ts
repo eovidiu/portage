@@ -284,6 +284,70 @@ describe("POST /api/copy/jobs/:job_id/tracks/:position/match (D9 scenarios)", ()
     const res = await doFetch("/api/copy/jobs/job-1/tracks/0/match", { method: "POST", body: {} });
     expect(res.status).toBe(400);
   });
+
+  it("allows matching a previously-skipped track (N1: unmatched/skipped are eligible)", async () => {
+    mockGetJob.mockResolvedValueOnce(makeJobRow());
+    mockGetTrack.mockResolvedValueOnce({ ...makeTrackRow(), state: "skipped" as const });
+    mockTidalFetch.mockResolvedValueOnce({ ok: true, status: 200 } as Response);
+    mockAddTracksToPlaylist.mockResolvedValueOnce({ added: 1, invalidIds: [], errors: 0 });
+
+    const res = await doFetch("/api/copy/jobs/job-1/tracks/0/match", {
+      method: "POST",
+      body: { dest_track_id: "td-new" },
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it.each(["written", "matched", "pending", "write_failed"] as const)(
+    "returns 409 when the track state is %s (N1: only unmatched/skipped are eligible)",
+    async (state) => {
+      mockGetJob.mockResolvedValueOnce(makeJobRow());
+      mockGetTrack.mockResolvedValueOnce({ ...makeTrackRow(), state });
+
+      const res = await doFetch("/api/copy/jobs/job-1/tracks/0/match", {
+        method: "POST",
+        body: { dest_track_id: "td-new" },
+      });
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: "track_not_eligible" });
+      expect(mockAddTracksToPlaylist).not.toHaveBeenCalled();
+      expect(mockUpdateTrackMatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("returns 502 and leaves the row unmatched when the Tidal add reports the id invalid (N1)", async () => {
+    mockGetJob.mockResolvedValueOnce(makeJobRow());
+    mockGetTrack.mockResolvedValueOnce(makeTrackRow());
+    mockTidalFetch.mockResolvedValueOnce({ ok: true, status: 200 } as Response);
+    mockAddTracksToPlaylist.mockResolvedValueOnce({ added: 0, invalidIds: ["td-new"], errors: 0 });
+
+    const res = await doFetch("/api/copy/jobs/job-1/tracks/0/match", {
+      method: "POST",
+      body: { dest_track_id: "td-new" },
+    });
+
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "dest_add_failed" });
+    expect(mockUpdateTrackMatch).not.toHaveBeenCalled();
+  });
+
+  it("returns 502 when the Spotify add is rate_limited on the second consecutive 429 (N1)", async () => {
+    mockGetJob.mockResolvedValueOnce(makeJobRow({ direction: "tidal_to_spotify" }));
+    mockGetTrack.mockResolvedValueOnce(makeTrackRow());
+    mockSpotifyFetch.mockResolvedValueOnce({ ok: true, status: 200 } as Response);
+    mockAddItems.mockResolvedValueOnce({ added: 0, snapshotId: null, rateLimited: true });
+
+    const res = await doFetch("/api/copy/jobs/job-1/tracks/0/match", {
+      method: "POST",
+      body: { dest_track_id: "sp-new" },
+    });
+
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "dest_add_failed" });
+    expect(mockUpdateTrackMatch).not.toHaveBeenCalled();
+  });
 });
 
 describe("POST /api/copy/jobs/:job_id/tracks/:position/skip", () => {
