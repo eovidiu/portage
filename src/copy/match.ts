@@ -138,7 +138,12 @@ async function searchTidalByIsrc(
 ): Promise<IsrcSearchOutcome> {
   const url = `${TIDAL_TRACKS_URL}?filter[isrc]=${encodeURIComponent(isrc.toUpperCase())}&include=artists`;
   const response = await tidalFetch(env, url);
-  if (response.status === 429 || !response.ok) return { status: "no_match" };
+  // F-030 review B2: 429 must propagate as rate_limited, not fall through as
+  // no_match — treating it as no_match previously fed the track straight into
+  // a doomed fuzzy search, burning subrequest budget on a call that was also
+  // likely to be rate-limited.
+  if (response.status === 429) return { status: "rate_limited" };
+  if (!response.ok) return { status: "no_match" };
 
   const body = (await response.json()) as { data?: JsonApiResource[]; included?: JsonApiResource[] };
   const index = buildIncludedIndex(body.included);
@@ -161,21 +166,37 @@ async function searchTidalByIsrc(
   return best ? { status: "matched", tidalId: best.id } : { status: "no_match" };
 }
 
-async function fuzzySearchTidal(track: CopyJobTrackRow, env: Env): Promise<ResolvedTidalCandidate[]> {
+type FuzzySearchOutcome =
+  | { status: "ok"; candidates: ResolvedTidalCandidate[] }
+  | { status: "rate_limited" };
+
+async function fuzzySearchTidal(track: CopyJobTrackRow, env: Env): Promise<FuzzySearchOutcome> {
   const query = `${normaliseTitle(track.artist ?? "")} ${normaliseTitle(track.title)}`;
   const result = await searchTidalCandidates(env, query);
-  if (result.status >= 400 || result.bodyParseError) return [];
-  return result.candidates;
+  // F-030 review B2: searchTidalCandidates already retries a single 429 once
+  // (src/match/tidal-search.ts); a 429 that survives the retry must still
+  // propagate as rate_limited rather than being folded into "no candidates".
+  if (result.status === 429) return { status: "rate_limited" };
+  if (result.status >= 400 || result.bodyParseError) return { status: "ok", candidates: [] };
+  return { status: "ok", candidates: result.candidates };
 }
+
+// F-030 review B2: matchOne* returns "rate_limited" instead of throwing or
+// silently marking the track unmatched so the batch loop can stop the tick
+// early — a rate limit is a signal that further calls this tick are also
+// likely to fail, so the remaining pending tracks are left untouched for a
+// later tick rather than burning subrequest budget on doomed calls.
+type MatchStepOutcome = "done" | "rate_limited";
 
 async function matchOneSpotifyToTidal(
   env: Env,
   jobId: string,
   track: CopyJobTrackRow,
   attemptIsrc: boolean,
-): Promise<void> {
+): Promise<MatchStepOutcome> {
   if (attemptIsrc && track.isrc) {
     const outcome = await searchTidalByIsrc(env, track.isrc, track.artist ?? "", track.duration_ms);
+    if (outcome.status === "rate_limited") return "rate_limited";
     if (outcome.status === "matched") {
       const sql = neon(env.DATABASE_URL);
       await insertMatch(sql, {
@@ -191,12 +212,14 @@ async function matchOneSpotifyToTidal(
         confidence: 0.95,
         dest_track_id: outcome.tidalId,
       });
-      return;
+      return "done";
     }
   }
 
-  const candidates = await fuzzySearchTidal(track, env);
-  const ranked = rankAgainstTrack(track, candidates);
+  const fuzzy = await fuzzySearchTidal(track, env);
+  if (fuzzy.status === "rate_limited") return "rate_limited";
+
+  const ranked = rankAgainstTrack(track, fuzzy.candidates);
   if (ranked.length > 0 && ranked[0].score >= ACCEPT_THRESHOLD) {
     const sql = neon(env.DATABASE_URL);
     await insertMatch(sql, {
@@ -208,6 +231,7 @@ async function matchOneSpotifyToTidal(
     });
   }
   await applyFuzzyOutcome(env, jobId, track, ranked);
+  return "done";
 }
 
 async function matchSpotifyToTidal(
@@ -237,8 +261,12 @@ async function matchSpotifyToTidal(
   const isrcPool = remaining.slice(0, isrcBudget);
   const fuzzyOnlyPool = remaining.slice(isrcBudget, isrcBudget + fuzzyBudget);
 
-  for (const track of isrcPool) await matchOneSpotifyToTidal(env, jobId, track, true);
-  for (const track of fuzzyOnlyPool) await matchOneSpotifyToTidal(env, jobId, track, false);
+  for (const track of isrcPool) {
+    if ((await matchOneSpotifyToTidal(env, jobId, track, true)) === "rate_limited") return;
+  }
+  for (const track of fuzzyOnlyPool) {
+    if ((await matchOneSpotifyToTidal(env, jobId, track, false)) === "rate_limited") return;
+  }
 }
 
 // --- tidal_to_spotify ---------------------------------------------------
@@ -248,9 +276,10 @@ async function matchOneTidalToSpotify(
   jobId: string,
   track: CopyJobTrackRow,
   attemptIsrc: boolean,
-): Promise<void> {
+): Promise<MatchStepOutcome> {
   if (attemptIsrc && track.isrc) {
     const outcome = await searchByIsrc(env, track.isrc, trackAsSource(track));
+    if (outcome.status === "rate_limited") return "rate_limited";
     if (outcome.status === "matched" && outcome.candidate) {
       await updateTrackMatch(env, jobId, track.position, {
         state: "matched",
@@ -258,14 +287,19 @@ async function matchOneTidalToSpotify(
         confidence: outcome.confidence ?? 0.95,
         dest_track_id: outcome.candidate.id,
       });
-      return;
+      return "done";
     }
   }
 
+  // F-030 review B2: searchByText's own rate_limited (from a second
+  // consecutive 429, src/providers/spotify/search.ts) must propagate the same
+  // way as the ISRC branch — it must not be folded into "no candidates".
   const result = await searchByText(env, track.title, track.artist ?? "");
-  const candidates = result.status === "ok" ? result.candidates : [];
-  const ranked = rankAgainstTrack(track, candidates);
+  if (result.status === "rate_limited") return "rate_limited";
+
+  const ranked = rankAgainstTrack(track, result.candidates);
   await applyFuzzyOutcome(env, jobId, track, ranked);
+  return "done";
 }
 
 async function matchTidalToSpotify(
@@ -278,8 +312,12 @@ async function matchTidalToSpotify(
   const isrcPool = tracks.slice(0, isrcBudget);
   const fuzzyOnlyPool = tracks.slice(isrcBudget, isrcBudget + fuzzyBudget);
 
-  for (const track of isrcPool) await matchOneTidalToSpotify(env, jobId, track, true);
-  for (const track of fuzzyOnlyPool) await matchOneTidalToSpotify(env, jobId, track, false);
+  for (const track of isrcPool) {
+    if ((await matchOneTidalToSpotify(env, jobId, track, true)) === "rate_limited") return;
+  }
+  for (const track of fuzzyOnlyPool) {
+    if ((await matchOneTidalToSpotify(env, jobId, track, false)) === "rate_limited") return;
+  }
 }
 
 // --- entry point ---------------------------------------------------------

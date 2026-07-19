@@ -322,21 +322,89 @@ describe("spotify_to_tidal — fuzzy match accepted (writes back to matches)", (
   });
 });
 
-describe("spotify_to_tidal — ISRC search edge cases", () => {
-  it("treats a 429 response as no_match and falls through to fuzzy", async () => {
+describe("spotify_to_tidal — rate_limited ends the tick early (B2)", () => {
+  it("leaves the track pending and skips the fuzzy fallback on a 429 ISRC response", async () => {
     mockSql.mockResolvedValueOnce([makeTrack()]).mockResolvedValueOnce([]);
     mockTidalFetch.mockResolvedValueOnce({ ok: false, status: 429 } as Response);
+
+    await runMatchPhaseStep(mockEnv, makeJob({ direction: "spotify_to_tidal" }), 2, 2);
+
+    expect(mockSearchTidalCandidates).not.toHaveBeenCalled();
+    expect(mockUpdateTrackMatch).not.toHaveBeenCalled();
+  });
+
+  it("leaves the track pending on a 429 fuzzy response (no isrc)", async () => {
+    mockSql.mockResolvedValueOnce([makeTrack({ isrc: null })]).mockResolvedValueOnce([]);
     mockSearchTidalCandidates.mockResolvedValueOnce({
       candidates: [],
-      retried: false,
-      status: 200,
+      retried: true,
+      status: 429,
       bodyParseError: false,
     });
 
     await runMatchPhaseStep(mockEnv, makeJob({ direction: "spotify_to_tidal" }), 2, 2);
-    expect(mockSearchTidalCandidates).toHaveBeenCalledOnce();
+
+    expect(mockUpdateTrackMatch).not.toHaveBeenCalled();
   });
 
+  it("stops processing the fuzzy-only pool once an earlier track hits rate_limited", async () => {
+    mockSql
+      .mockResolvedValueOnce([
+        makeTrack({ position: 0, source_track_id: "sp1", isrc: null }),
+        makeTrack({ position: 1, source_track_id: "sp2", isrc: null }),
+      ])
+      .mockResolvedValueOnce([]); // cache lookup
+    mockSearchTidalCandidates.mockResolvedValueOnce({
+      candidates: [],
+      retried: true,
+      status: 429,
+      bodyParseError: false,
+    });
+
+    await runMatchPhaseStep(mockEnv, makeJob({ direction: "spotify_to_tidal" }), 0, 2);
+
+    // Only track 1's fuzzy search runs; track 2 is left untouched this tick.
+    expect(mockSearchTidalCandidates).toHaveBeenCalledOnce();
+    expect(mockUpdateTrackMatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("tidal_to_spotify — rate_limited ends the tick early (B2)", () => {
+  it("leaves the track pending when the ISRC search is rate_limited", async () => {
+    mockSql.mockResolvedValueOnce([makeTrack({ source_track_id: "td-src" })]);
+    mockSearchByIsrc.mockResolvedValueOnce({ status: "rate_limited" });
+
+    await runMatchPhaseStep(mockEnv, makeJob({ direction: "tidal_to_spotify" }), 2, 2);
+
+    expect(mockSearchByText).not.toHaveBeenCalled();
+    expect(mockUpdateTrackMatch).not.toHaveBeenCalled();
+  });
+
+  it("leaves the track pending when the fuzzy text search is rate_limited", async () => {
+    mockSql.mockResolvedValueOnce([makeTrack({ source_track_id: "td-src", isrc: null })]);
+    mockSearchByText.mockResolvedValueOnce({ status: "rate_limited", candidates: [] });
+
+    await runMatchPhaseStep(mockEnv, makeJob({ direction: "tidal_to_spotify" }), 2, 2);
+
+    expect(mockUpdateTrackMatch).not.toHaveBeenCalled();
+  });
+
+  it("stops processing the fuzzy-only pool once an earlier track hits rate_limited", async () => {
+    mockSql.mockResolvedValueOnce([
+      makeTrack({ position: 0, source_track_id: "td1", isrc: null }),
+      makeTrack({ position: 1, source_track_id: "td2", isrc: null }),
+    ]);
+    mockSearchByText.mockResolvedValueOnce({ status: "rate_limited", candidates: [] });
+
+    await runMatchPhaseStep(mockEnv, makeJob({ direction: "tidal_to_spotify" }), 0, 2);
+
+    // Only track 1's fuzzy search runs; track 2 is left untouched this tick.
+    expect(mockSearchByText).toHaveBeenCalledOnce();
+    expect(mockUpdateTrackMatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("spotify_to_tidal — ISRC search edge cases", () => {
   it("treats a non-ok response as no_match and falls through to fuzzy", async () => {
     mockSql.mockResolvedValueOnce([makeTrack()]).mockResolvedValueOnce([]);
     mockTidalFetch.mockResolvedValueOnce({ ok: false, status: 500 } as Response);
