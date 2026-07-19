@@ -193,6 +193,19 @@ CREATE TABLE IF NOT EXISTS copy_jobs (
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     finished_at         TIMESTAMPTZ
 );
+-- F-030 review B1: batch-in-flight marker for the write phase's count-based
+-- crash reconcile. Holds the source-track positions of a batch that was
+-- persisted BEFORE the provider add() call; cleared atomically (same
+-- transaction as the state='written' flip) once the batch resolves. A
+-- non-null value on job load means the previous tick may have died between
+-- the add() call and the flip, so the next tick must reconcile via
+-- readDestItemCount before selecting a new batch.
+ALTER TABLE copy_jobs ADD COLUMN IF NOT EXISTS write_batch_positions JSONB;
+-- F-030 review B3: consecutive non-fatal tick errors. Reset to 0 on any
+-- successful tick; at 5 the job is failed with error_code 'tick_error_streak'
+-- so a persistently-erroring job doesn't retry forever and block the
+-- single-active-job slot.
+ALTER TABLE copy_jobs ADD COLUMN IF NOT EXISTS consecutive_errors INT NOT NULL DEFAULT 0;
 -- Partial UNIQUE index: at most one non-terminal job may exist. The insert
 -- in createJob maps a 23505 violation to the API's 409 job_already_active,
 -- closing the check-then-insert race on concurrent POST /api/copy/jobs.

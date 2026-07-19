@@ -15,7 +15,12 @@ import {
   setDestPlaylist,
   setStatus,
   recomputeCounters,
+  recomputeCountersForJobs,
   countSkipped,
+  setWriteBatchPositions,
+  resolveWriteBatch,
+  incrementConsecutiveErrors,
+  resetConsecutiveErrors,
   NON_TERMINAL_STATUSES,
   type CopyJobRow,
 } from "../../src/db/copy_jobs";
@@ -44,6 +49,8 @@ function makeRow(overrides: Partial<CopyJobRow> = {}): CopyJobRow {
     matched: 0,
     written: 0,
     unmatched: 0,
+    write_batch_positions: null,
+    consecutive_errors: 0,
     created_at: "2026-07-18T00:00:00Z",
     updated_at: "2026-07-18T00:00:00Z",
     finished_at: null,
@@ -175,7 +182,7 @@ describe("setDestPlaylist", () => {
 
 describe("setStatus", () => {
   it("updates status with optional error_code and finished_at", async () => {
-    mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([{ job_id: "job-1" }]);
     await setStatus(mockEnv, "job-1", "failed", {
       error_code: "spotify_reauth_required",
       finished_at: "2026-07-18T01:00:00Z",
@@ -187,14 +194,124 @@ describe("setStatus", () => {
       "failed",
       "spotify_reauth_required",
       "2026-07-18T01:00:00Z",
+      NON_TERMINAL_STATUSES,
     ]);
   });
 
   it("defaults error_code/finished_at to null when omitted", async () => {
-    mockSql.mockResolvedValueOnce([]);
+    mockSql.mockResolvedValueOnce([{ job_id: "job-1" }]);
     await setStatus(mockEnv, "job-1", "matching");
     const [, params] = mockSql.mock.calls[0] as [string, unknown[]];
-    expect(params).toEqual(["job-1", "matching", null, null]);
+    expect(params).toEqual(["job-1", "matching", null, null, NON_TERMINAL_STATUSES]);
+  });
+
+  it("guards the update with WHERE status = ANY(non-terminal) (S2 cancel race)", async () => {
+    mockSql.mockResolvedValueOnce([{ job_id: "job-1" }]);
+    await setStatus(mockEnv, "job-1", "writing");
+    const [query, params] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(query).toContain("status = ANY($5)");
+    expect(params[4]).toEqual(NON_TERMINAL_STATUSES);
+  });
+
+  it("returns true when the row was updated", async () => {
+    mockSql.mockResolvedValueOnce([{ job_id: "job-1" }]);
+    const applied = await setStatus(mockEnv, "job-1", "writing");
+    expect(applied).toBe(true);
+  });
+
+  it("returns false (no throw) when a concurrent cancel already moved the job to a terminal status", async () => {
+    mockSql.mockResolvedValueOnce([]); // 0 rows: WHERE status=ANY(non-terminal) matched nothing
+    const applied = await setStatus(mockEnv, "job-1", "writing");
+    expect(applied).toBe(false);
+  });
+});
+
+describe("setWriteBatchPositions (B1 batch-in-flight marker)", () => {
+  it("persists a position array as JSON", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    await setWriteBatchPositions(mockEnv, "job-1", [3, 4, 5]);
+    const [query, params] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(query).toContain("write_batch_positions");
+    expect(params).toEqual(["job-1", JSON.stringify([3, 4, 5])]);
+  });
+
+  it("persists null to clear the marker", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    await setWriteBatchPositions(mockEnv, "job-1", null);
+    const [, params] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(params).toEqual(["job-1", null]);
+  });
+});
+
+describe("resolveWriteBatch (B1 flip + clear-marker)", () => {
+  it("flips written positions, write_failed positions, and always clears the marker", async () => {
+    mockSql.mockResolvedValue([]);
+    await resolveWriteBatch(mockEnv, "job-1", [0, 1], [2]);
+
+    expect(mockSql).toHaveBeenCalledTimes(3);
+    const [writtenQuery, writtenParams] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(writtenQuery).toContain("state = 'written'");
+    expect(writtenParams).toEqual(["job-1", [0, 1]]);
+
+    const [failedQuery, failedParams] = mockSql.mock.calls[1] as [string, unknown[]];
+    expect(failedQuery).toContain("state = 'write_failed'");
+    expect(failedParams).toEqual(["job-1", [2]]);
+
+    const [clearQuery, clearParams] = mockSql.mock.calls[2] as [string, unknown[]];
+    expect(clearQuery).toContain("write_batch_positions = NULL");
+    expect(clearParams).toEqual(["job-1"]);
+  });
+
+  it("clears the marker even when both position lists are empty", async () => {
+    mockSql.mockResolvedValue([]);
+    await resolveWriteBatch(mockEnv, "job-1", [], []);
+    expect(mockSql).toHaveBeenCalledTimes(1);
+    const [clearQuery] = mockSql.mock.calls[0] as [string];
+    expect(clearQuery).toContain("write_batch_positions = NULL");
+  });
+});
+
+describe("incrementConsecutiveErrors / resetConsecutiveErrors (B3)", () => {
+  it("increments and returns the new streak count", async () => {
+    mockSql.mockResolvedValueOnce([{ consecutive_errors: 3 }]);
+    const streak = await incrementConsecutiveErrors(mockEnv, "job-1");
+    expect(streak).toBe(3);
+    const [query, params] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(query).toContain("consecutive_errors = consecutive_errors + 1");
+    expect(params).toEqual(["job-1"]);
+  });
+
+  it("resets the streak to 0 on a successful tick", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    await resetConsecutiveErrors(mockEnv, "job-1");
+    const [query, params] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(query).toContain("consecutive_errors = 0");
+    expect(params).toEqual(["job-1"]);
+  });
+});
+
+describe("recomputeCountersForJobs (S3 batch aggregate for GET /jobs)", () => {
+  it("groups copy_job_tracks by job_id + state in one query", async () => {
+    mockSql.mockResolvedValueOnce([
+      { job_id: "job-1", state: "matched", n: 2 },
+      { job_id: "job-1", state: "written", n: 3 },
+      { job_id: "job-2", state: "unmatched", n: 1 },
+    ]);
+
+    const result = await recomputeCountersForJobs(mockEnv, ["job-1", "job-2"]);
+
+    expect(mockSql).toHaveBeenCalledOnce();
+    const [query, params] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(query).toContain("GROUP BY job_id, state");
+    expect(params).toEqual([["job-1", "job-2"]]);
+    expect(result.get("job-1")).toEqual({ fetched: 5, matched: 2, written: 3, unmatched: 0 });
+    expect(result.get("job-2")).toEqual({ fetched: 1, matched: 0, written: 0, unmatched: 1 });
+  });
+
+  it("returns an empty map without querying when jobIds is empty", async () => {
+    const result = await recomputeCountersForJobs(mockEnv, []);
+    expect(result.size).toBe(0);
+    expect(mockSql).not.toHaveBeenCalled();
   });
 });
 

@@ -31,6 +31,8 @@ function makeJob(overrides: Partial<CopyJobRow> = {}): CopyJobRow {
     matched: 0,
     written: 8,
     unmatched: 2,
+    write_batch_positions: null,
+    consecutive_errors: 0,
     created_at: "2026-07-18T00:00:00Z",
     updated_at: "2026-07-18T01:00:00Z",
     finished_at: "2026-07-18T01:00:00Z",

@@ -41,6 +41,14 @@ export interface CopyJobRow {
   matched: number;
   written: number;
   unmatched: number;
+  // F-030 review B1: positions of the write batch currently in flight (marker
+  // persisted before the provider add() call, cleared atomically with the
+  // written/write_failed flip). Non-null on job load means the previous tick
+  // may have died mid-write; see src/copy/write.ts's crash reconcile.
+  write_batch_positions: number[] | null;
+  // F-030 review B3: consecutive non-fatal tick errors; reset on success,
+  // fails the job at 5 (error_code 'tick_error_streak').
+  consecutive_errors: number;
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -155,18 +163,102 @@ export interface SetStatusExtra {
   finished_at?: string | null;
 }
 
+/**
+ * Updates status/error_code/finished_at, guarded by `WHERE status = ANY(non-
+ * terminal)` (F-030 review S2) so a concurrent cancel landing between the
+ * engine's job load and this write can never be overwritten back to a
+ * non-terminal status. Returns whether the row was actually updated —
+ * `false` means the job was already terminal (e.g. cancelled mid-tick);
+ * callers MUST treat that as "stop", not as an error.
+ */
 export async function setStatus(
   env: Env,
   jobId: string,
   status: CopyJobStatus,
   extra: SetStatusExtra = {},
+): Promise<boolean> {
+  const sql = neon(env.DATABASE_URL);
+  const updated = await sql(
+    `UPDATE copy_jobs
+     SET status = $2, error_code = $3, finished_at = COALESCE($4, finished_at), updated_at = now()
+     WHERE job_id = $1 AND status = ANY($5)
+     RETURNING job_id`,
+    [jobId, status, extra.error_code ?? null, extra.finished_at ?? null, NON_TERMINAL_STATUSES],
+  );
+  return (updated as unknown[]).length > 0;
+}
+
+/** Persists (or clears, with `null`) the B1 batch-in-flight marker. */
+export async function setWriteBatchPositions(
+  env: Env,
+  jobId: string,
+  positions: number[] | null,
 ): Promise<void> {
   const sql = neon(env.DATABASE_URL);
   await sql(
     `UPDATE copy_jobs
-     SET status = $2, error_code = $3, finished_at = COALESCE($4, finished_at), updated_at = now()
+     SET write_batch_positions = $2, updated_at = now()
      WHERE job_id = $1`,
-    [jobId, status, extra.error_code ?? null, extra.finished_at ?? null],
+    [jobId, positions != null ? JSON.stringify(positions) : null],
+  );
+}
+
+/**
+ * Resolves a write batch: flips `written`/`write_failed` positions on
+ * copy_job_tracks and always clears the batch-in-flight marker (B1) — the
+ * marker's only purpose is to survive an isolate crash between the provider
+ * add() call and this resolution; once we're here with a definitive result,
+ * it must be cleared regardless of outcome. Sequential statements, not a
+ * transaction — mirrors insertMatch's (src/db/matches.ts) documented
+ * precedent: atomicity is provided by the copy engine's advisory lock (D2),
+ * which serializes all writes to a single in-flight tick.
+ */
+export async function resolveWriteBatch(
+  env: Env,
+  jobId: string,
+  writtenPositions: number[],
+  writeFailedPositions: number[],
+): Promise<void> {
+  const sql = neon(env.DATABASE_URL);
+  if (writtenPositions.length > 0) {
+    await sql(
+      `UPDATE copy_job_tracks SET state = 'written', updated_at = now()
+       WHERE job_id = $1 AND position = ANY($2)`,
+      [jobId, writtenPositions],
+    );
+  }
+  if (writeFailedPositions.length > 0) {
+    await sql(
+      `UPDATE copy_job_tracks SET state = 'write_failed', reason = 'invalid_track_id', updated_at = now()
+       WHERE job_id = $1 AND position = ANY($2)`,
+      [jobId, writeFailedPositions],
+    );
+  }
+  await sql(
+    `UPDATE copy_jobs SET write_batch_positions = NULL, updated_at = now() WHERE job_id = $1`,
+    [jobId],
+  );
+}
+
+/** Increments the B3 consecutive-error streak and returns the new count. */
+export async function incrementConsecutiveErrors(env: Env, jobId: string): Promise<number> {
+  const sql = neon(env.DATABASE_URL);
+  const rows = await sql(
+    `UPDATE copy_jobs
+     SET consecutive_errors = consecutive_errors + 1, updated_at = now()
+     WHERE job_id = $1
+     RETURNING consecutive_errors`,
+    [jobId],
+  );
+  return (rows as Array<{ consecutive_errors: number }>)[0]?.consecutive_errors ?? 0;
+}
+
+/** Resets the B3 consecutive-error streak to 0 (called after any successful tick). */
+export async function resetConsecutiveErrors(env: Env, jobId: string): Promise<void> {
+  const sql = neon(env.DATABASE_URL);
+  await sql(
+    `UPDATE copy_jobs SET consecutive_errors = 0, updated_at = now() WHERE job_id = $1`,
+    [jobId],
   );
 }
 
@@ -208,6 +300,41 @@ export async function recomputeCounters(env: Env, jobId: string): Promise<JobCou
   );
 
   return { fetched, matched, written, unmatched };
+}
+
+/**
+ * Batch variant of recomputeCounters for GET /api/copy/jobs (F-030 review
+ * S3): one GROUP BY query covering every requested job, read-only (does not
+ * persist to copy_jobs) so the list endpoint stays at exactly 2 DB queries
+ * total (listJobs + this). Jobs with no rows yet are simply absent from the
+ * returned map; callers fall back to the job's own (zero) counters.
+ */
+export async function recomputeCountersForJobs(
+  env: Env,
+  jobIds: string[],
+): Promise<Map<string, JobCounters>> {
+  const result = new Map<string, JobCounters>();
+  if (jobIds.length === 0) return result;
+
+  const sql = neon(env.DATABASE_URL);
+  const rows = await sql(
+    `SELECT job_id, state, COUNT(*)::integer AS n
+     FROM copy_job_tracks
+     WHERE job_id = ANY($1)
+     GROUP BY job_id, state`,
+    [jobIds],
+  );
+
+  for (const row of rows as Array<{ job_id: string; state: string; n: number }>) {
+    const counters = result.get(row.job_id) ?? { fetched: 0, matched: 0, written: 0, unmatched: 0 };
+    counters.fetched += row.n;
+    if (row.state === "matched") counters.matched += row.n;
+    if (row.state === "written") counters.written += row.n;
+    if (row.state === "unmatched") counters.unmatched += row.n;
+    result.set(row.job_id, counters);
+  }
+
+  return result;
 }
 
 /**

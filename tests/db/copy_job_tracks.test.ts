@@ -133,6 +133,21 @@ describe("insertFetchedPage", () => {
     expect(firstParams).toContain(10);
     expect(secondParams).toContain(11);
   });
+
+  it("guards the job status write with WHERE status = ANY(non-terminal) (S2 cancel race)", async () => {
+    txQueryResults.push([{ id: "sp1" }], []);
+    await insertFetchedPage(mockEnv, "job-1", {
+      tracks: [
+        { source_track_id: "sp1", isrc: null, title: "Song", artist: null, album: null, duration_ms: null },
+      ],
+      positionStart: 0,
+      cursor: "cursor-2",
+      isLastPage: false,
+    });
+    const [jobQuery, jobParams] = mockTxSql.mock.calls[1] as [string, unknown[]];
+    expect(jobQuery).toContain("status = ANY(");
+    expect(jobParams).toContainEqual(["queued", "fetching", "matching", "writing"]);
+  });
 });
 
 describe("countPending", () => {

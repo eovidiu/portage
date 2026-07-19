@@ -4,6 +4,7 @@
 
 import { neon } from "@neondatabase/serverless";
 import type { Env } from "../env";
+import { NON_TERMINAL_STATUSES } from "./copy_jobs";
 
 export type CopyTrackState =
   | "pending"
@@ -96,6 +97,10 @@ export async function insertFetchedPage(
         ],
       ),
     ),
+    // F-030 review S2: guarded by WHERE status = ANY(non-terminal) so a
+    // concurrent cancel landing mid-fetch can never be overwritten back to
+    // 'fetching'/'matching'. A 0-row result is silently accepted here — the
+    // inserted track rows are harmless on an already-terminal (cancelled) job.
     txSql(
       `UPDATE copy_jobs
        SET fetch_cursor = $2,
@@ -103,8 +108,8 @@ export async function insertFetchedPage(
            fetched = fetched + $3,
            total_tracks = COALESCE($4, total_tracks),
            updated_at = now()
-       WHERE job_id = $1`,
-      [jobId, cursor, tracks.length, totalTracks ?? null],
+       WHERE job_id = $1 AND status = ANY($5)`,
+      [jobId, cursor, tracks.length, totalTracks ?? null, NON_TERMINAL_STATUSES],
     ),
   ]);
 }
