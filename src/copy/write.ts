@@ -10,7 +10,12 @@ import {
   type CopyJobRow,
   type CopyDirection,
 } from "../db/copy_jobs";
-import { listMatchedForWrite, updateTracksState, type CopyJobTrackRow } from "../db/copy_job_tracks";
+import {
+  listMatchedForWrite,
+  listTracksByPositions,
+  updateTracksState,
+  type CopyJobTrackRow,
+} from "../db/copy_job_tracks";
 import { readDestItemCount, type DestProvider } from "./dest-reader";
 import { createPlaylist as createTidalPlaylist, addTracksToPlaylist } from "../providers/tidal/playlist";
 import { createPlaylist as createSpotifyPlaylist, addItems } from "../providers/spotify/playlist-write";
@@ -62,11 +67,19 @@ function partitionCandidates(candidates: CopyJobTrackRow[], knownIds: Set<string
   return { alreadyKnown, toWrite };
 }
 
-function samePositions(a: number[], b: number[]): boolean {
-  if (a.length !== b.length) return false;
-  const sortedA = [...a].sort((x, y) => x - y);
-  const sortedB = [...b].sort((x, y) => x - y);
-  return sortedA.every((v, i) => v === sortedB[i]);
+/**
+ * A write batch that made zero forward progress (nothing written, nothing
+ * write_failed — e.g. a whole-batch provider rejection with no per-id detail,
+ * or a persistent rate limit). The marker is cleared before this is thrown:
+ * nothing landed, so the next attempt safely re-selects. The engine's B3
+ * handler counts it into the consecutive-error streak so a persistently
+ * stalled batch fails the job instead of looping forever (review NEW-B3a).
+ */
+export class WriteBatchStalledError extends Error {
+  constructor(jobId: string, detail: string) {
+    super(`write batch stalled for job ${jobId}: ${detail}`);
+    this.name = "WriteBatchStalledError";
+  }
 }
 
 /**
@@ -89,25 +102,32 @@ async function performAddAndResolve(
   await setWriteBatchPositions(env, job.job_id, positions);
   const ids = toWrite.map((t) => t.dest_track_id as string);
 
+  let written: number[];
+  let writeFailed: number[] = [];
+
   if (job.direction === "spotify_to_tidal") {
     const result = await addTracksToPlaylist(env, destPlaylistId, ids);
     const invalidSet = new Set(result.invalidIds);
-    const writeFailed = toWrite.filter((t) => invalidSet.has(t.dest_track_id as string)).map((t) => t.position);
+    writeFailed = toWrite.filter((t) => invalidSet.has(t.dest_track_id as string)).map((t) => t.position);
     // result.errors > 0 covers both a persistent-429 abort and any
     // unidentified per-batch failure — in either case we cannot tell which
     // specific ids landed, so conservatively leave the non-invalid remainder
     // 'matched' for retry rather than risk marking an unwritten row 'written'.
-    const written =
+    written =
       result.errors > 0
         ? []
         : toWrite.filter((t) => !invalidSet.has(t.dest_track_id as string)).map((t) => t.position);
-    await resolveWriteBatch(env, job.job_id, written, writeFailed);
-    return;
+  } else {
+    const result = await addItems(env, destPlaylistId, ids);
+    written = result.rateLimited ? [] : positions;
   }
 
-  const result = await addItems(env, destPlaylistId, ids);
-  const written = result.rateLimited ? [] : positions;
-  await resolveWriteBatch(env, job.job_id, written, []);
+  await resolveWriteBatch(env, job.job_id, written, writeFailed);
+  if (written.length === 0 && writeFailed.length === 0) {
+    // Provider reported the batch as not applied (rate limit or whole-batch
+    // rejection) — nothing landed, so the cleared marker is accurate.
+    throw new WriteBatchStalledError(job.job_id, "provider applied no rows in this batch");
+  }
 }
 
 /**
@@ -167,6 +187,25 @@ async function reconcileInFlightBatch(
 export async function runWritePhaseStep(env: Env, job: CopyJobRow): Promise<void> {
   const { destPlaylistId } = await ensureDestPlaylist(env, job);
 
+  // Review NEW-B1a: an in-flight marker is reconciled against its OWN rows,
+  // never against a freshly-selected batch — append-mode dedup-skips recorded
+  // before a crash shrink the matched pool, so a fresh selection can backfill
+  // past the marker and diverge from it. The marker rows still carry their
+  // dest_track_id, so they are self-sufficient for the count reconcile; a
+  // fresh batch is only ever selected when no marker is pending.
+  if (job.write_batch_positions != null) {
+    const markerRows = await listTracksByPositions(env, job.job_id, job.write_batch_positions);
+    const stillMatched = markerRows.filter((t) => t.state === "matched");
+    if (stillMatched.length === 0) {
+      // Every marker row was already resolved before the crash — nothing to
+      // reconcile, just clear the marker.
+      await resolveWriteBatch(env, job.job_id, [], []);
+    } else {
+      await reconcileInFlightBatch(env, job, destPlaylistId, stillMatched);
+    }
+    return;
+  }
+
   const batchCap = batchCapFor(job.direction);
   const candidates = await listMatchedForWrite(env, job.job_id, batchCap);
   if (candidates.length === 0) return;
@@ -177,24 +216,7 @@ export async function runWritePhaseStep(env: Env, job: CopyJobRow): Promise<void
   if (alreadyKnown.length > 0) {
     await updateTracksState(env, job.job_id, alreadyKnown.map((t) => t.position), "skipped", "already_present");
   }
+  if (toWrite.length === 0) return;
 
-  if (toWrite.length === 0) {
-    // A stale in-flight marker referring to an already-fully-resolved batch
-    // (e.g. a crash landed between the flip and the marker-clear statement)
-    // — nothing left to reconcile against, so just clear it.
-    if (job.write_batch_positions != null) {
-      await resolveWriteBatch(env, job.job_id, [], []);
-    }
-    return;
-  }
-
-  const currentPositions = toWrite.map((t) => t.position);
-  const resuming =
-    job.write_batch_positions != null && samePositions(job.write_batch_positions, currentPositions);
-
-  if (resuming) {
-    await reconcileInFlightBatch(env, job, destPlaylistId, toWrite);
-  } else {
-    await performAddAndResolve(env, job, destPlaylistId, toWrite);
-  }
+  await performAddAndResolve(env, job, destPlaylistId, toWrite);
 }

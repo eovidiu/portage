@@ -139,6 +139,22 @@ export async function listPendingForMatch(
   return rows as CopyJobTrackRow[];
 }
 
+/** Loads the exact rows named by an in-flight write-batch marker (NEW-B1a). */
+export async function listTracksByPositions(
+  env: Env,
+  jobId: string,
+  positions: number[],
+): Promise<CopyJobTrackRow[]> {
+  const sql = neon(env.DATABASE_URL);
+  const rows = await sql(
+    `SELECT * FROM copy_job_tracks
+     WHERE job_id = $1 AND position = ANY($2)
+     ORDER BY position ASC`,
+    [jobId, positions],
+  );
+  return rows as CopyJobTrackRow[];
+}
+
 export async function listMatchedForWrite(
   env: Env,
   jobId: string,

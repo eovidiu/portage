@@ -275,3 +275,15 @@ describe("updateTracksState", () => {
     expect(params).toEqual(["job-1", [5], "skipped", "already_present"]);
   });
 });
+
+describe("listTracksByPositions", () => {
+  it("selects exactly the given positions in order", async () => {
+    const { listTracksByPositions } = await import("../../src/db/copy_job_tracks");
+    mockQuery.mockResolvedValueOnce([{ position: 1 }, { position: 3 }]);
+    const rows = await listTracksByPositions(mockEnv, "job-1", [3, 1]);
+    expect(rows.map((r) => r.position)).toEqual([1, 3]);
+    const [query, params] = mockQuery.mock.calls[0];
+    expect(query).toContain("position = ANY($2)");
+    expect(params).toEqual(["job-1", [3, 1]]);
+  });
+});

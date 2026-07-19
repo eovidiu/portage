@@ -5,6 +5,7 @@ import type { CopyJobTrackRow } from "../../src/db/copy_job_tracks";
 
 vi.mock("../../src/db/copy_job_tracks", () => ({
   listMatchedForWrite: vi.fn(),
+  listTracksByPositions: vi.fn(),
   updateTracksState: vi.fn(),
 }));
 vi.mock("../../src/db/copy_jobs", () => ({
@@ -23,13 +24,18 @@ vi.mock("../../src/providers/spotify/playlist-write", () => ({
 }));
 
 import { runWritePhaseStep } from "../../src/copy/write";
-import { listMatchedForWrite, updateTracksState } from "../../src/db/copy_job_tracks";
+import {
+  listMatchedForWrite,
+  listTracksByPositions,
+  updateTracksState,
+} from "../../src/db/copy_job_tracks";
 import { setDestPlaylist, setWriteBatchPositions, resolveWriteBatch } from "../../src/db/copy_jobs";
 import { readDestItemCount } from "../../src/copy/dest-reader";
 import * as tidalPlaylist from "../../src/providers/tidal/playlist";
 import * as spotifyPlaylistWrite from "../../src/providers/spotify/playlist-write";
 
 const mockListMatchedForWrite = vi.mocked(listMatchedForWrite);
+const mockListTracksByPositions = vi.mocked(listTracksByPositions);
 const mockUpdateTracksState = vi.mocked(updateTracksState);
 const mockSetDestPlaylist = vi.mocked(setDestPlaylist);
 const mockSetWriteBatchPositions = vi.mocked(setWriteBatchPositions);
@@ -157,7 +163,7 @@ describe("Append skips already-present tracks", () => {
 
 describe("B1: count-based crash reconcile (real logic, multi-page-safe)", () => {
   it("re-adds the batch when the destination count shows it never landed", async () => {
-    mockListMatchedForWrite.mockResolvedValueOnce([
+    mockListTracksByPositions.mockResolvedValueOnce([
       makeTrack({ position: 5, dest_track_id: "td-5" }),
       makeTrack({ position: 6, dest_track_id: "td-6" }),
     ]);
@@ -180,7 +186,7 @@ describe("B1: count-based crash reconcile (real logic, multi-page-safe)", () => 
   });
 
   it("flips to written without re-adding when the destination count shows the batch already landed", async () => {
-    mockListMatchedForWrite.mockResolvedValueOnce([
+    mockListTracksByPositions.mockResolvedValueOnce([
       makeTrack({ position: 5, dest_track_id: "td-5" }),
       makeTrack({ position: 6, dest_track_id: "td-6" }),
     ]);
@@ -201,7 +207,7 @@ describe("B1: count-based crash reconcile (real logic, multi-page-safe)", () => 
   });
 
   it("uses job.written (not dest_known_ids alone) as part of the pre-write baseline for a 'new' destination", async () => {
-    mockListMatchedForWrite.mockResolvedValueOnce([makeTrack({ position: 3, dest_track_id: "td-3" })]);
+    mockListTracksByPositions.mockResolvedValueOnce([makeTrack({ position: 3, dest_track_id: "td-3" })]);
     mockReadDestItemCount.mockResolvedValueOnce(4); // written(4) + 0 base for 'new' == pre-write
 
     const job = makeJob({
@@ -219,7 +225,7 @@ describe("B1: count-based crash reconcile (real logic, multi-page-safe)", () => 
   });
 
   it("conservatively flips without re-adding on an unexpected count (documented fallback)", async () => {
-    mockListMatchedForWrite.mockResolvedValueOnce([makeTrack({ position: 0, dest_track_id: "td-0" })]);
+    mockListTracksByPositions.mockResolvedValueOnce([makeTrack({ position: 0, dest_track_id: "td-0" })]);
     mockReadDestItemCount.mockResolvedValueOnce(999); // neither pre-write nor pre-write+1
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
@@ -232,36 +238,36 @@ describe("B1: count-based crash reconcile (real logic, multi-page-safe)", () => 
     logSpy.mockRestore();
   });
 
-  it("ignores a stale marker referring to a different (already-resolved) batch and writes the new one fresh", async () => {
-    mockListMatchedForWrite.mockResolvedValueOnce([makeTrack({ position: 9, dest_track_id: "td-9" })]);
-    mockTidalAdd.mockResolvedValueOnce({ added: 1, invalidIds: [], errors: 0 });
-
-    // Marker refers to positions [0,1], which are no longer 'matched' (already
-    // resolved) — the current selection is [9], a fresh, unrelated batch.
+  it("clears a marker whose rows were already resolved, deferring fresh work to the next tick", async () => {
+    // Marker refers to positions [0,1], already resolved before the crash.
+    // NEW-B1a: the marker is settled on its own; no fresh batch this tick.
+    mockListTracksByPositions.mockResolvedValueOnce([
+      makeTrack({ position: 0, state: "written", dest_track_id: "td-0" }),
+      makeTrack({ position: 1, state: "written", dest_track_id: "td-1" }),
+    ]);
     const job = makeJob({ dest_playlist_id: "existing-dest", write_batch_positions: [0, 1] });
     await runWritePhaseStep(mockEnv, job);
 
     expect(mockReadDestItemCount).not.toHaveBeenCalled();
-    expect(mockSetWriteBatchPositions).toHaveBeenCalledWith(mockEnv, "job-1", [9]);
-    expect(mockTidalAdd).toHaveBeenCalledWith(mockEnv, "existing-dest", ["td-9"]);
+    expect(mockListMatchedForWrite).not.toHaveBeenCalled();
+    expect(mockTidalAdd).not.toHaveBeenCalled();
+    expect(mockResolveWriteBatch).toHaveBeenCalledWith(mockEnv, "job-1", [], []);
   });
 
-  it("clears a stale marker when every candidate this tick is an append-dedup skip (toWrite empty)", async () => {
-    // candidates.length > 0 (so we get past the fetch), but every one of them
-    // is already known (append dedup) -> toWrite ends up empty.
+  it("marks an all-dedup-skip tick without touching the marker machinery", async () => {
     mockListMatchedForWrite.mockResolvedValueOnce([makeTrack({ position: 2, dest_track_id: "already-there" })]);
     const job = makeJob({
       dest_mode: "append",
       dest_playlist_id: "existing-dest",
       dest_known_ids: ["already-there"],
-      write_batch_positions: [0, 1],
     });
 
     await runWritePhaseStep(mockEnv, job);
 
     expect(mockUpdateTracksState).toHaveBeenCalledWith(mockEnv, "job-1", [2], "skipped", "already_present");
-    expect(mockResolveWriteBatch).toHaveBeenCalledWith(mockEnv, "job-1", [], []);
-    expect(mockReadDestItemCount).not.toHaveBeenCalled();
+    expect(mockTidalAdd).not.toHaveBeenCalled();
+    expect(mockSetWriteBatchPositions).not.toHaveBeenCalled();
+    expect(mockResolveWriteBatch).not.toHaveBeenCalled();
   });
 });
 
@@ -278,25 +284,16 @@ describe("S1: write results are consumed, not assumed", () => {
     expect(mockResolveWriteBatch).toHaveBeenCalledWith(mockEnv, "job-1", [0], [1]);
   });
 
-  it("leaves all non-invalid rows 'matched' (no flip) when the Tidal batch errors out", async () => {
-    mockListMatchedForWrite.mockResolvedValueOnce([makeTrack({ position: 0, dest_track_id: "td-0" })]);
-    mockTidalAdd.mockResolvedValueOnce({ added: 0, invalidIds: [], errors: 1 });
+  it("flips invalid ids to write_failed and leaves the rest 'matched' when the batch also errors (progress, no stall)", async () => {
+    mockListMatchedForWrite.mockResolvedValueOnce([
+      makeTrack({ position: 0, dest_track_id: "td-good" }),
+      makeTrack({ position: 1, dest_track_id: "td-bad" }),
+    ]);
+    mockTidalAdd.mockResolvedValueOnce({ added: 0, invalidIds: ["td-bad"], errors: 1 });
 
     await runWritePhaseStep(mockEnv, makeJob({ dest_playlist_id: "existing-dest" }));
 
-    expect(mockResolveWriteBatch).toHaveBeenCalledWith(mockEnv, "job-1", [], []);
-  });
-
-  it("leaves the row 'matched' (no flip) when the Spotify add is rate-limited/aborted", async () => {
-    mockListMatchedForWrite.mockResolvedValueOnce([makeTrack({ position: 0, dest_track_id: "sp-0" })]);
-    mockSpotifyAdd.mockResolvedValueOnce({ added: 0, snapshotId: null, rateLimited: true });
-
-    await runWritePhaseStep(
-      mockEnv,
-      makeJob({ direction: "tidal_to_spotify", dest_playlist_id: "existing-dest" }),
-    );
-
-    expect(mockResolveWriteBatch).toHaveBeenCalledWith(mockEnv, "job-1", [], []);
+    expect(mockResolveWriteBatch).toHaveBeenCalledWith(mockEnv, "job-1", [], [1]);
   });
 
   it("flips to written when the Spotify add succeeds", async () => {
@@ -319,5 +316,91 @@ describe("no-op when there is nothing to write", () => {
     expect(mockTidalAdd).not.toHaveBeenCalled();
     expect(mockUpdateTracksState).not.toHaveBeenCalled();
     expect(mockResolveWriteBatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("NEW-B1a: marker reconciled against its own rows, never a re-selection", () => {
+  it("append-mode crash after a dedup-skip: flips the marker's rows without re-adding, ignores backfilled selection", async () => {
+    // Reviewer repro: crashed batch marked [1,2,3] (pos 0 was dedup-skipped
+    // pre-add); the add landed but the flip did not. A fresh selection would
+    // backfill to [1,2,3,4]. The marker's own rows must be reconciled and
+    // flipped; NO provider add may happen this tick.
+    const job = makeJob({
+      dest_mode: "append",
+      dest_playlist_id: "dest-1",
+      dest_known_ids: ["k1", "k2"],
+      written: 0,
+      write_batch_positions: [1, 2, 3],
+    });
+    mockListTracksByPositions.mockResolvedValueOnce([
+      makeTrack({ position: 1, dest_track_id: "t1" }),
+      makeTrack({ position: 2, dest_track_id: "t2" }),
+      makeTrack({ position: 3, dest_track_id: "t3" }),
+    ]);
+    mockReadDestItemCount.mockResolvedValueOnce(5); // 2 known + 0 written + 3 landed
+
+    await runWritePhaseStep(mockEnv, job);
+
+    expect(mockTidalAdd).not.toHaveBeenCalled();
+    expect(mockSpotifyAdd).not.toHaveBeenCalled();
+    expect(mockResolveWriteBatch).toHaveBeenCalledWith(mockEnv, "job-1", [1, 2, 3], []);
+    expect(mockListTracksByPositions).toHaveBeenCalledWith(mockEnv, "job-1", [1, 2, 3]);
+  });
+
+  it("re-adds only the marker's rows when the count shows the crashed batch never landed", async () => {
+    const job = makeJob({
+      dest_mode: "append",
+      dest_playlist_id: "dest-1",
+      dest_known_ids: ["k1", "k2"],
+      written: 0,
+      write_batch_positions: [1, 2],
+    });
+    mockListTracksByPositions.mockResolvedValueOnce([
+      makeTrack({ position: 1, dest_track_id: "t1" }),
+      makeTrack({ position: 2, dest_track_id: "t2" }),
+    ]);
+    mockReadDestItemCount.mockResolvedValueOnce(2); // batch never landed
+    mockTidalAdd.mockResolvedValueOnce({ added: 2, invalidIds: [], errors: 0 });
+
+    await runWritePhaseStep(mockEnv, job);
+
+    expect(mockTidalAdd).toHaveBeenCalledWith(mockEnv, "dest-1", ["t1", "t2"]);
+    expect(mockResolveWriteBatch).toHaveBeenCalledWith(mockEnv, "job-1", [1, 2], []);
+  });
+
+  it("clears the marker without adding when its rows were already resolved before the crash", async () => {
+    const job = makeJob({
+      dest_playlist_id: "dest-1",
+      write_batch_positions: [1, 2],
+    });
+    mockListTracksByPositions.mockResolvedValueOnce([
+      makeTrack({ position: 1, state: "written", dest_track_id: "t1" }),
+      makeTrack({ position: 2, state: "written", dest_track_id: "t2" }),
+    ]);
+
+    await runWritePhaseStep(mockEnv, job);
+
+    expect(mockTidalAdd).not.toHaveBeenCalled();
+    expect(mockResolveWriteBatch).toHaveBeenCalledWith(mockEnv, "job-1", [], []);
+  });
+});
+
+describe("NEW-B3a: zero-progress write batch trips the error streak", () => {
+  it("clears the marker and throws WriteBatchStalledError when a Tidal batch reports errors with no invalid ids", async () => {
+    const job = makeJob({ dest_playlist_id: "dest-1" });
+    mockListMatchedForWrite.mockResolvedValueOnce([makeTrack({ position: 0, dest_track_id: "t1" })]);
+    mockTidalAdd.mockResolvedValueOnce({ added: 0, invalidIds: [], errors: 1 });
+
+    await expect(runWritePhaseStep(mockEnv, job)).rejects.toThrow(/stalled/i);
+    expect(mockResolveWriteBatch).toHaveBeenCalledWith(mockEnv, "job-1", [], []);
+  });
+
+  it("clears the marker and throws WriteBatchStalledError when the Spotify add is rate-limited twice", async () => {
+    const job = makeJob({ direction: "tidal_to_spotify", dest_playlist_id: "dest-1" });
+    mockListMatchedForWrite.mockResolvedValueOnce([makeTrack({ position: 0, dest_track_id: "t1" })]);
+    mockSpotifyAdd.mockResolvedValueOnce({ added: 0, snapshotId: null, rateLimited: true });
+
+    await expect(runWritePhaseStep(mockEnv, job)).rejects.toThrow(/stalled/i);
+    expect(mockResolveWriteBatch).toHaveBeenCalledWith(mockEnv, "job-1", [], []);
   });
 });
