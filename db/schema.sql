@@ -1,5 +1,6 @@
 -- Source of truth for portage schema. Apply via Neon MCP or psql.
--- Last applied to project square-wave-04443485 on 2026-04-26 (added idx_tracks_added_at).
+-- Last applied to project square-wave-04443485 on 2026-07-19 (F-030: copy_jobs,
+-- copy_job_tracks, provider_tokens.scopes, idx_copy_jobs_single_active).
 --
 -- Invariants (application-layer enforcement — not DB CHECKs):
 --   I-001: tracks.spotify_id MUST appear in exactly one of matches OR unmatched at any time,
