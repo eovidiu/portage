@@ -5,7 +5,7 @@ vi.mock("../../../src/providers/tidal/client", () => ({
   tidalFetch: vi.fn(),
 }));
 
-import { getPlaylistItems, resolveArtistNames } from "../../../src/providers/tidal/playlist-items";
+import { getPlaylistItems, resolveTrackArtists } from "../../../src/providers/tidal/playlist-items";
 import { tidalFetch } from "../../../src/providers/tidal/client";
 
 const mockTidalFetch = tidalFetch as ReturnType<typeof vi.fn>;
@@ -42,16 +42,19 @@ beforeEach(() => {
 //   - Playlists_Items_Multi_Relationship_Data_Document (8093-8149, 20603-20625):
 //     data[] is bare resource identifiers { id, type }; included[] carries the
 //     full Tracks_Resource_Object when `include=items` is set.
+//   - The items endpoint's `include` supports ONLY `items` (8107-8119) — there
+//     is no `items.artists`, and live responses (verified 2026-07-21 against a
+//     public playlist) return included[] track resources with NO `relationships`
+//     key at all. Artist linkage MUST come from a separate /tracks batch.
+//   - /tracks GET (11508): `filter[id]` is array(string) → repeated params;
+//     `include=artists` returns relationships.artists.data on data[] plus full
+//     Artists resources (Artists_Attributes.name, 18788-18820) in included[],
+//     de-duplicated across tracks (live-verified 2026-07-21).
 //   - Tracks_Attributes (21829-21903): isrc (required), title (required),
 //     duration (required, ISO-8601, e.g. "PT2M58S").
-//   - Tracks_Relationships.artists (21916) is a Multi_Relationship_Data_Document
-//     — artist resource identifiers only, no names.
-//   - Artists_Attributes.name (18788-18820ish): artist display name; GET
-//     /artists?filter[id]= (2428) returns Artists_Multi_Resource_Data_Document
-//     (18888-18892) with full attributes in data[].
 
 describe("getPlaylistItems", () => {
-  it("reads isrc/title/durationMs/artistIds from included[] track resources", async () => {
+  it("reads isrc/title/durationMs from included[] track resources", async () => {
     mockTidalFetch.mockResolvedValueOnce(
       ok({
         data: [{ id: "T1", type: "tracks" }],
@@ -60,7 +63,6 @@ describe("getPlaylistItems", () => {
             id: "T1",
             type: "tracks",
             attributes: { isrc: "QMJMT1701229", title: "Kill Jay Z", duration: "PT2M58S" },
-            relationships: { artists: { data: [{ id: "A1", type: "artists" }] } },
           },
         ],
       }),
@@ -74,7 +76,6 @@ describe("getPlaylistItems", () => {
         isrc: "QMJMT1701229",
         title: "Kill Jay Z",
         durationMs: 178000,
-        artistIds: ["A1"],
       },
     ]);
     expect(page.hasMore).toBe(false);
@@ -101,39 +102,11 @@ describe("getPlaylistItems", () => {
     expect(page.items[1].title).toBe("First");
   });
 
-  it("handles multiple artist ids on a track", async () => {
-    mockTidalFetch.mockResolvedValueOnce(
-      ok({
-        data: [{ id: "T1", type: "tracks" }],
-        included: [
-          {
-            id: "T1",
-            type: "tracks",
-            attributes: { isrc: "A", title: "Feat.", duration: "PT3M" },
-            relationships: {
-              artists: {
-                data: [
-                  { id: "A1", type: "artists" },
-                  { id: "A2", type: "artists" },
-                ],
-              },
-            },
-          },
-        ],
-      }),
-    );
-
-    const page = await getPlaylistItems(makeEnv(), "PL1");
-    expect(page.items[0].artistIds).toEqual(["A1", "A2"]);
-  });
-
-  it("returns nulls for isrc/title/durationMs and empty artistIds when the track is not in included[]", async () => {
+  it("returns nulls for isrc/title/durationMs when the track is not in included[]", async () => {
     mockTidalFetch.mockResolvedValueOnce(ok({ data: [{ id: "T1", type: "tracks" }] }));
 
     const page = await getPlaylistItems(makeEnv(), "PL1");
-    expect(page.items).toEqual([
-      { tidalId: "T1", isrc: null, title: null, durationMs: null, artistIds: [] },
-    ]);
+    expect(page.items).toEqual([{ tidalId: "T1", isrc: null, title: null, durationMs: null }]);
   });
 
   it("returns empty items array when data is absent", async () => {
@@ -168,69 +141,123 @@ describe("getPlaylistItems", () => {
   });
 });
 
-describe("resolveArtistNames", () => {
-  it("returns a Map of artistId -> name from a single batch", async () => {
+describe("resolveTrackArtists", () => {
+  it("maps track id -> primary artist name via relationships + included[]", async () => {
     mockTidalFetch.mockResolvedValueOnce(
       ok({
         data: [
-          { id: "A1", attributes: { name: "JAY Z" } },
-          { id: "A2", attributes: { name: "Beyoncé" } },
+          {
+            id: "T1",
+            type: "tracks",
+            attributes: { isrc: "A", title: "One", duration: "PT1M" },
+            relationships: { artists: { data: [{ id: "A1", type: "artists" }] } },
+          },
+          {
+            id: "T2",
+            type: "tracks",
+            attributes: { isrc: "B", title: "Two", duration: "PT2M" },
+            relationships: {
+              artists: {
+                data: [
+                  { id: "A2", type: "artists" },
+                  { id: "A1", type: "artists" },
+                ],
+              },
+            },
+          },
+        ],
+        included: [
+          { id: "A1", type: "artists", attributes: { name: "JAY Z" } },
+          { id: "A2", type: "artists", attributes: { name: "Beyoncé" } },
         ],
       }),
     );
 
-    const names = await resolveArtistNames(makeEnv(), ["A1", "A2"]);
-    expect(names.get("A1")).toBe("JAY Z");
-    expect(names.get("A2")).toBe("Beyoncé");
+    const names = await resolveTrackArtists(makeEnv(), ["T1", "T2"]);
+    expect(names.get("T1")).toBe("JAY Z");
+    expect(names.get("T2")).toBe("Beyoncé");
     expect(names.size).toBe(2);
   });
 
-  it("sends repeated filter[id] query params (OpenAPI default array style)", async () => {
-    mockTidalFetch.mockResolvedValueOnce(ok({ data: [] }));
-    await resolveArtistNames(makeEnv(), ["A1", "A2"]);
-    const url: string = mockTidalFetch.mock.calls[0][1];
-    expect(url).toContain("filter[id]=A1");
-    expect(url).toContain("filter[id]=A2");
+  it("resolves a shared artist that included[] de-duplicates across tracks", async () => {
+    // Live-verified 2026-07-21: two tracks by the same artist return
+    // included[] with a single artists resource.
+    mockTidalFetch.mockResolvedValueOnce(
+      ok({
+        data: [
+          { id: "T1", type: "tracks", relationships: { artists: { data: [{ id: "A1", type: "artists" }] } } },
+          { id: "T2", type: "tracks", relationships: { artists: { data: [{ id: "A1", type: "artists" }] } } },
+        ],
+        included: [{ id: "A1", type: "artists", attributes: { name: "Queen" } }],
+      }),
+    );
+
+    const names = await resolveTrackArtists(makeEnv(), ["T1", "T2"]);
+    expect(names.get("T1")).toBe("Queen");
+    expect(names.get("T2")).toBe("Queen");
   });
 
-  it("de-duplicates artist ids before batching", async () => {
-    mockTidalFetch.mockResolvedValueOnce(ok({ data: [{ id: "A1", attributes: { name: "JAY Z" } } ] }));
-    await resolveArtistNames(makeEnv(), ["A1", "A1", "A1"]);
+  it("sends repeated filter[id] query params and include=artists", async () => {
+    mockTidalFetch.mockResolvedValueOnce(ok({ data: [] }));
+    await resolveTrackArtists(makeEnv(), ["T1", "T2"]);
+    const url: string = mockTidalFetch.mock.calls[0][1];
+    expect(url).toContain("/tracks?");
+    expect(url).toContain("filter[id]=T1");
+    expect(url).toContain("filter[id]=T2");
+    expect(url).toContain("include=artists");
+  });
+
+  it("de-duplicates track ids before batching", async () => {
+    mockTidalFetch.mockResolvedValueOnce(ok({ data: [] }));
+    await resolveTrackArtists(makeEnv(), ["T1", "T1", "T1"]);
     expect(mockTidalFetch).toHaveBeenCalledOnce();
     const url: string = mockTidalFetch.mock.calls[0][1];
     expect((url.match(/filter\[id\]=/g) ?? []).length).toBe(1);
   });
 
   it("returns an empty Map without a network call for an empty id list", async () => {
-    const names = await resolveArtistNames(makeEnv(), []);
+    const names = await resolveTrackArtists(makeEnv(), []);
     expect(names.size).toBe(0);
     expect(mockTidalFetch).not.toHaveBeenCalled();
   });
 
-  it("skips artists missing a name attribute", async () => {
+  it("skips tracks with no artists relationship and artists missing a name", async () => {
     mockTidalFetch.mockResolvedValueOnce(
-      ok({ data: [{ id: "A1", attributes: {} }, { id: "A2", attributes: { name: "Real Name" } }] }),
+      ok({
+        data: [
+          { id: "T1", type: "tracks" },
+          { id: "T2", type: "tracks", relationships: { artists: { data: [] } } },
+          { id: "T3", type: "tracks", relationships: { artists: { data: [{ id: "A1", type: "artists" }] } } },
+          { id: "T4", type: "tracks", relationships: { artists: { data: [{ id: "A2", type: "artists" }] } } },
+        ],
+        included: [
+          { id: "A1", type: "artists", attributes: {} },
+          { id: "A2", type: "artists", attributes: { name: "Real Name" } },
+        ],
+      }),
     );
-    const names = await resolveArtistNames(makeEnv(), ["A1", "A2"]);
-    expect(names.has("A1")).toBe(false);
-    expect(names.get("A2")).toBe("Real Name");
+    const names = await resolveTrackArtists(makeEnv(), ["T1", "T2", "T3", "T4"]);
+    expect(names.has("T1")).toBe(false);
+    expect(names.has("T2")).toBe(false);
+    expect(names.has("T3")).toBe(false);
+    expect(names.get("T4")).toBe("Real Name");
   });
 
   it("throws on non-ok response", async () => {
     mockTidalFetch.mockResolvedValueOnce(statusResponse(500));
-    await expect(resolveArtistNames(makeEnv(), ["A1"])).rejects.toThrow("500");
+    await expect(resolveTrackArtists(makeEnv(), ["T1"])).rejects.toThrow("500");
   });
 
   it("returns an empty Map when data is absent from the response", async () => {
     mockTidalFetch.mockResolvedValueOnce(ok({}));
-    const names = await resolveArtistNames(makeEnv(), ["A1"]);
+    const names = await resolveTrackArtists(makeEnv(), ["T1"]);
     expect(names.size).toBe(0);
   });
 
   it("batches ids across multiple requests when exceeding the batch size", async () => {
-    const ids = Array.from({ length: 55 }, (_, i) => `A${i}`);
+    const ids = Array.from({ length: 25 }, (_, i) => `T${i}`);
     mockTidalFetch.mockImplementation(async () => ok({ data: [] }));
-    await resolveArtistNames(makeEnv(), ids);
+    await resolveTrackArtists(makeEnv(), ids);
     expect(mockTidalFetch).toHaveBeenCalledTimes(2);
   });
 });
