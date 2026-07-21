@@ -1,6 +1,6 @@
 import type { Env } from "../../env";
 import { tidalFetch } from "./client";
-import { playlistTracksUrl, TIDAL_ARTISTS_URL } from "./playlist-endpoints";
+import { playlistTracksUrl, TIDAL_TRACKS_URL } from "./playlist-endpoints";
 import {
   parseIsoDurationMs,
   buildIncludedIndex,
@@ -13,7 +13,6 @@ export interface PlaylistItem {
   isrc: string | null;
   title: string | null;
   durationMs: number | null;
-  artistIds: string[];
 }
 
 export interface PlaylistItemsPage {
@@ -30,10 +29,15 @@ interface ItemsResponse {
 
 /**
  * Fetch one page of playlist items with track attributes (isrc/title/
- * durationMs) and artist ids, needed for the Tidal->Spotify copy direction.
+ * durationMs), needed for the Tidal->Spotify copy direction.
  * `getPlaylistTracks` (playlist.ts) only extracts bare track ids for the
  * existing Spotify->Tidal dedup check; this reader is separate because it
  * resolves the full `included[]` track resource per item.
+ *
+ * Artist linkage is NOT available here: the endpoint's `include` supports
+ * only `items` (openapi-types.ts:8107-8119 — no `items.artists`), and live
+ * responses (verified 2026-07-21) return included[] track resources with no
+ * `relationships` key at all. Use `resolveTrackArtists` for artist names.
  *
  * Verified: 2026-07-18 against openapi-types.ts:8093-8149 (path) and
  * :20603-20625 (Playlists_Items_Multi_Relationship_Data_Document — data[] is
@@ -63,69 +67,69 @@ function _toPlaylistItem(
   ref: { id: string; type: string },
   index: ReturnType<typeof buildIncludedIndex>,
 ): PlaylistItem {
-  const track = lookupIncluded(index, "tracks", ref.id);
-  const attrs = track?.attributes;
-  // Tracks_Relationships.artists is a Multi_Relationship_Data_Document
-  // (openapi-types.ts:21916) — `data` is always an array or absent, never a
-  // bare object, so no single-object fallback is needed here.
-  const artistsData = track?.relationships?.artists?.data;
-  const artistRefs = Array.isArray(artistsData) ? artistsData : [];
+  const attrs = lookupIncluded(index, "tracks", ref.id)?.attributes;
   return {
     tidalId: ref.id,
     isrc: typeof attrs?.isrc === "string" ? attrs.isrc : null,
     title: typeof attrs?.title === "string" ? attrs.title : null,
     durationMs: parseIsoDurationMs(attrs?.duration),
-    artistIds: artistRefs.map((a) => a.id),
   };
 }
 
-// No documented cap on `filter[id]` array length for GET /artists (raw OAS
-// schema: `{ type: array, items: { type: string } }`, no maxItems). This
-// batch size is a conservative, NOT OAS-grounded choice — unlike BATCH_SIZE
-// (playlist add-tracks, capped at 20 by the OAS's maxItems).
-const ARTIST_BATCH_SIZE = 50;
+// URL-length-safe batch for repeated filter[id] params; matches the observed
+// playlist-items page size (20), so one fetch page resolves in one batch.
+// The OAS puts no maxItems on /tracks filter[id] — conservative choice.
+const TRACK_BATCH_SIZE = 20;
 
-interface ArtistsResponse {
-  data?: Array<{ id: string; attributes?: { name?: string } }>;
+interface TracksBatchResponse {
+  data?: JsonApiResource[];
+  included?: JsonApiResource[];
 }
 
 /**
- * Resolve artist display names for a set of Tidal artist ids, batched via
- * `GET /artists?filter[id]=`. Artist names are NOT embedded in a track's
- * `included[]` resource (Tracks_Relationships.artists is identifiers only),
- * so this is always a separate round trip.
+ * Resolve primary-artist display names for a set of Tidal track ids, batched
+ * via `GET /tracks?filter[id]=…&include=artists`. This is the only way to get
+ * artist linkage for playlist items — see `getPlaylistItems`.
  *
- * Verified: 2026-07-18 against openapi-types.ts:2428 (path /artists) and
- * :18888-18892 (Artists_Multi_Resource_Data_Document — full attributes in
- * data[], no further include needed) and :18788-18820 (Artists_Attributes.name).
+ * Verified: 2026-07-21 against openapi-types.ts:11508 (path /tracks GET —
+ * `filter[id]` is array(string) → repeated params, `include` supports
+ * artists) and :21916 (Tracks_Relationships.artists) and :18788-18820
+ * (Artists_Attributes.name), and live: data[] carries
+ * relationships.artists.data and included[] the full artists resources,
+ * de-duplicated when tracks share an artist.
  */
-export async function resolveArtistNames(
+export async function resolveTrackArtists(
   env: Env,
-  artistIds: string[],
+  trackIds: string[],
 ): Promise<Map<string, string>> {
   const names = new Map<string, string>();
-  const uniqueIds = Array.from(new Set(artistIds));
-  for (let i = 0; i < uniqueIds.length; i += ARTIST_BATCH_SIZE) {
-    const batch = uniqueIds.slice(i, i + ARTIST_BATCH_SIZE);
-    await _resolveArtistBatch(env, batch, names);
+  const uniqueIds = Array.from(new Set(trackIds));
+  for (let i = 0; i < uniqueIds.length; i += TRACK_BATCH_SIZE) {
+    const batch = uniqueIds.slice(i, i + TRACK_BATCH_SIZE);
+    await _resolveTrackArtistBatch(env, batch, names);
   }
   return names;
 }
 
-async function _resolveArtistBatch(
+async function _resolveTrackArtistBatch(
   env: Env,
   batch: string[],
   names: Map<string, string>,
 ): Promise<void> {
   const params = batch.map((id) => `filter[id]=${encodeURIComponent(id)}`).join("&");
-  const response = await tidalFetch(env, `${TIDAL_ARTISTS_URL}?${params}`);
+  const response = await tidalFetch(env, `${TIDAL_TRACKS_URL}?${params}&include=artists`);
   if (!response.ok) {
-    throw new Error(`resolveArtistNames failed: HTTP ${response.status}`);
+    throw new Error(`resolveTrackArtists failed: HTTP ${response.status}`);
   }
-  const json = (await response.json()) as ArtistsResponse;
-  for (const artist of json.data ?? []) {
-    if (typeof artist.attributes?.name === "string") {
-      names.set(artist.id, artist.attributes.name);
+  const json = (await response.json()) as TracksBatchResponse;
+  const index = buildIncludedIndex(json.included);
+  for (const track of json.data ?? []) {
+    const artistsData = track.relationships?.artists?.data;
+    const firstRef = Array.isArray(artistsData) ? artistsData[0] : undefined;
+    const artist = firstRef ? lookupIncluded(index, "artists", firstRef.id) : undefined;
+    const name = artist?.attributes?.name;
+    if (typeof name === "string") {
+      names.set(track.id, name);
     }
   }
 }

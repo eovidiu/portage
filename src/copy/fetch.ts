@@ -7,7 +7,7 @@ import type { CopyJobRow } from "../db/copy_jobs";
 import { insertFetchedPage, type CopyTrackInput } from "../db/copy_job_tracks";
 import { upsertTracks, type TrackRow } from "../db/tracks";
 import { getSpotifyPlaylistItems } from "./spotify-source";
-import { getPlaylistItems, resolveArtistNames } from "../providers/tidal/playlist-items";
+import { getPlaylistItems, resolveTrackArtists } from "../providers/tidal/playlist-items";
 
 async function fetchSpotifyToTidalPage(
   env: Env,
@@ -49,17 +49,16 @@ async function fetchTidalToSpotifyPage(
   job: CopyJobRow,
 ): Promise<{ tracks: CopyTrackInput[]; hasMore: boolean; cursor: string | null }> {
   const page = await getPlaylistItems(env, job.source_playlist_id, job.fetch_cursor);
-  const artistIds = page.items.flatMap((i) => i.artistIds.slice(0, 1));
-  const names = await resolveArtistNames(env, artistIds);
+  const names = await resolveTrackArtists(env, page.items.map((i) => i.tidalId));
 
   const tracks: CopyTrackInput[] = page.items.map((i) => ({
     source_track_id: i.tidalId,
     isrc: i.isrc,
     title: i.title ?? "",
-    // Phase 1's getPlaylistItems doesn't resolve album relationships, so
+    // The /tracks artist batch doesn't resolve album relationships, so
     // tidal_to_spotify sourced tracks always carry album=null (score.ts's
     // album component contributes 0 for this direction — documented gap).
-    artist: names.get(i.artistIds[0]) ?? null,
+    artist: names.get(i.tidalId) ?? null,
     album: null,
     duration_ms: i.durationMs,
   }));

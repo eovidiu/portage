@@ -5,7 +5,7 @@ import type { CopyJobRow } from "../../src/db/copy_jobs";
 vi.mock("../../src/copy/spotify-source", () => ({ getSpotifyPlaylistItems: vi.fn() }));
 vi.mock("../../src/providers/tidal/playlist-items", () => ({
   getPlaylistItems: vi.fn(),
-  resolveArtistNames: vi.fn(),
+  resolveTrackArtists: vi.fn(),
 }));
 vi.mock("../../src/db/copy_job_tracks", () => ({ insertFetchedPage: vi.fn() }));
 vi.mock("../../src/db/tracks", () => ({ upsertTracks: vi.fn() }));
@@ -13,13 +13,13 @@ vi.mock("@neondatabase/serverless", () => ({ neon: () => vi.fn() }));
 
 import { runFetchPhaseStep } from "../../src/copy/fetch";
 import { getSpotifyPlaylistItems } from "../../src/copy/spotify-source";
-import { getPlaylistItems, resolveArtistNames } from "../../src/providers/tidal/playlist-items";
+import { getPlaylistItems, resolveTrackArtists } from "../../src/providers/tidal/playlist-items";
 import { insertFetchedPage } from "../../src/db/copy_job_tracks";
 import { upsertTracks } from "../../src/db/tracks";
 
 const mockGetSpotifyPlaylistItems = vi.mocked(getSpotifyPlaylistItems);
 const mockGetPlaylistItems = vi.mocked(getPlaylistItems);
-const mockResolveArtistNames = vi.mocked(resolveArtistNames);
+const mockResolveTrackArtists = vi.mocked(resolveTrackArtists);
 const mockInsertFetchedPage = vi.mocked(insertFetchedPage);
 const mockUpsertTracks = vi.mocked(upsertTracks);
 
@@ -128,18 +128,18 @@ describe("runFetchPhaseStep — spotify_to_tidal", () => {
 });
 
 describe("runFetchPhaseStep — tidal_to_spotify", () => {
-  it("resolves artist names and does not upsert into the sync `tracks` table", async () => {
+  it("resolves artist names by track id and does not upsert into the sync `tracks` table", async () => {
     mockGetPlaylistItems.mockResolvedValueOnce({
-      items: [{ tidalId: "td1", isrc: "GBABC1234567", title: "Song", durationMs: 180000, artistIds: ["art-1"] }],
+      items: [{ tidalId: "td1", isrc: "GBABC1234567", title: "Song", durationMs: 180000 }],
       hasMore: false,
       cursor: null,
     });
-    mockResolveArtistNames.mockResolvedValueOnce(new Map([["art-1", "Tidal Artist"]]));
+    mockResolveTrackArtists.mockResolvedValueOnce(new Map([["td1", "Tidal Artist"]]));
 
     await runFetchPhaseStep(mockEnv, makeJob({ direction: "tidal_to_spotify", source_playlist_id: "tidal-src" }));
 
     expect(mockGetPlaylistItems).toHaveBeenCalledWith(mockEnv, "tidal-src", null);
-    expect(mockResolveArtistNames).toHaveBeenCalledWith(mockEnv, ["art-1"]);
+    expect(mockResolveTrackArtists).toHaveBeenCalledWith(mockEnv, ["td1"]);
     expect(mockUpsertTracks).not.toHaveBeenCalled();
     expect(mockInsertFetchedPage).toHaveBeenCalledWith(
       mockEnv,
@@ -159,13 +159,13 @@ describe("runFetchPhaseStep — tidal_to_spotify", () => {
     );
   });
 
-  it("leaves artist null when no artist ids resolve to a name", async () => {
+  it("leaves artist null when the track id resolves to no name", async () => {
     mockGetPlaylistItems.mockResolvedValueOnce({
-      items: [{ tidalId: "td2", isrc: null, title: "Song 2", durationMs: null, artistIds: [] }],
+      items: [{ tidalId: "td2", isrc: null, title: "Song 2", durationMs: null }],
       hasMore: false,
       cursor: null,
     });
-    mockResolveArtistNames.mockResolvedValueOnce(new Map());
+    mockResolveTrackArtists.mockResolvedValueOnce(new Map());
 
     await runFetchPhaseStep(mockEnv, makeJob({ direction: "tidal_to_spotify" }));
 
