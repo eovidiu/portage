@@ -59,6 +59,9 @@
 - [x] 4.1 Full suite + typecheck green; coverage ≥95% on touched code
 - [x] 4.2 Update `docs/README.md` feature map + pre-deploy checklist (Spotify
       re-consent step, cron-slot check, scope-verification step)
-- [ ] 4.3 features.json: F-030 entry updates (test_file, coverage, status)
-- [ ] 4.4 Deploy + live validation per design Migration Plan (small playlist both
+- [x] 4.3 features.json: F-030 entry updates (test_file, coverage, status)
+- [x] 4.4 Deploy + live validation per design Migration Plan (small playlist both
       directions); capture Version ID in context_summary Active Context
+      — spotify_to_tidal 37/41 (job d4dde03d); tidal_to_spotify required an
+      artist-resolution fix (PR #31, Version 629706a4) after the first job
+      went 0/40, re-validated 39/40 (job 7dffc1e6)
