@@ -5,7 +5,7 @@ import { neon } from "@neondatabase/serverless";
 import type { Env } from "../env";
 import type { CopyJobRow } from "../db/copy_jobs";
 import { insertFetchedPage, type CopyTrackInput } from "../db/copy_job_tracks";
-import { upsertTracks, type TrackRow } from "../db/tracks";
+import { buildUpsertQueries, type TrackRow } from "../db/tracks";
 import { getSpotifyPlaylistItems } from "./spotify-source";
 import { getPlaylistItems, resolveTrackArtists } from "../providers/tidal/playlist-items";
 
@@ -25,9 +25,13 @@ async function fetchSpotifyToTidalPage(
 
   // D4 write-back requires matches.spotify_id to satisfy its FK to tracks —
   // ensure the source track exists in the sync engine's catalogue table
-  // before the matching phase ever attempts insertMatch for it.
+  // before the matching phase ever attempts insertMatch for it. The whole
+  // page MUST go through one db.transaction() call (one Neon HTTP
+  // subrequest): per-row upserts on a 50-track page consumed the entire
+  // 50-subrequest free-tier budget and killed the tick before the page
+  // persist, leaving the job 'queued' forever.
   if (tracks.length > 0) {
-    const sql = neon(env.DATABASE_URL);
+    const db = neon(env.DATABASE_URL);
     const now = new Date().toISOString();
     const rows: TrackRow[] = page.items.map((i) => ({
       spotify_id: i.id,
@@ -38,7 +42,7 @@ async function fetchSpotifyToTidalPage(
       duration_ms: i.duration_ms,
       spotify_added_at: now,
     }));
-    await upsertTracks(sql, rows);
+    await db.transaction((txSql) => buildUpsertQueries(txSql, rows));
   }
 
   return { tracks, hasMore: page.hasMore, cursor: page.cursor };

@@ -8,20 +8,26 @@ vi.mock("../../src/providers/tidal/playlist-items", () => ({
   resolveTrackArtists: vi.fn(),
 }));
 vi.mock("../../src/db/copy_job_tracks", () => ({ insertFetchedPage: vi.fn() }));
-vi.mock("../../src/db/tracks", () => ({ upsertTracks: vi.fn() }));
-vi.mock("@neondatabase/serverless", () => ({ neon: () => vi.fn() }));
+vi.mock("../../src/db/tracks", () => ({ buildUpsertQueries: vi.fn(() => []) }));
+vi.mock("@neondatabase/serverless", () => {
+  const transaction = vi.fn(async (cb: (txSql: unknown) => unknown[]) => cb(vi.fn()));
+  return { neon: () => ({ transaction }), __transaction: transaction };
+});
 
 import { runFetchPhaseStep } from "../../src/copy/fetch";
 import { getSpotifyPlaylistItems } from "../../src/copy/spotify-source";
 import { getPlaylistItems, resolveTrackArtists } from "../../src/providers/tidal/playlist-items";
 import { insertFetchedPage } from "../../src/db/copy_job_tracks";
-import { upsertTracks } from "../../src/db/tracks";
+import { buildUpsertQueries } from "../../src/db/tracks";
+import * as neonModule from "@neondatabase/serverless";
 
 const mockGetSpotifyPlaylistItems = vi.mocked(getSpotifyPlaylistItems);
 const mockGetPlaylistItems = vi.mocked(getPlaylistItems);
 const mockResolveTrackArtists = vi.mocked(resolveTrackArtists);
 const mockInsertFetchedPage = vi.mocked(insertFetchedPage);
-const mockUpsertTracks = vi.mocked(upsertTracks);
+const mockBuildUpsertQueries = vi.mocked(buildUpsertQueries);
+const mockTransaction = (neonModule as unknown as { __transaction: ReturnType<typeof vi.fn> })
+  .__transaction;
 
 const mockEnv = { DATABASE_URL: "postgresql://test" } as Env;
 
@@ -57,7 +63,7 @@ beforeEach(() => {
 });
 
 describe("runFetchPhaseStep — spotify_to_tidal", () => {
-  it("fetches one page, upserts source tracks into `tracks`, and persists the page", async () => {
+  it("fetches one page, upserts source tracks into `tracks` in ONE transaction, and persists the page", async () => {
     mockGetSpotifyPlaylistItems.mockResolvedValueOnce({
       items: [
         { id: "sp1", isrc: "USABC1234567", title: "Song", artist: "Artist", album: "Album", duration_ms: 200000 },
@@ -69,8 +75,9 @@ describe("runFetchPhaseStep — spotify_to_tidal", () => {
     await runFetchPhaseStep(mockEnv, makeJob());
 
     expect(mockGetSpotifyPlaylistItems).toHaveBeenCalledWith(mockEnv, "src-1", null);
-    expect(mockUpsertTracks).toHaveBeenCalledOnce();
-    const upsertRows = mockUpsertTracks.mock.calls[0][1];
+    expect(mockTransaction).toHaveBeenCalledOnce();
+    expect(mockBuildUpsertQueries).toHaveBeenCalledOnce();
+    const upsertRows = mockBuildUpsertQueries.mock.calls[0][1];
     expect(upsertRows).toEqual([
       expect.objectContaining({ spotify_id: "sp1", isrc: "USABC1234567", artist: "Artist", title: "Song" }),
     ]);
@@ -123,7 +130,26 @@ describe("runFetchPhaseStep — spotify_to_tidal", () => {
   it("skips the tracks upsert when the page is empty", async () => {
     mockGetSpotifyPlaylistItems.mockResolvedValueOnce({ items: [], hasMore: false, cursor: null });
     await runFetchPhaseStep(mockEnv, makeJob());
-    expect(mockUpsertTracks).not.toHaveBeenCalled();
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+
+  it("upserts a full 50-track page with a single transaction subrequest (free-tier cap regression)", async () => {
+    // Production 2026-07-26..28: per-row upserts on a 50-track page burned the
+    // entire 50-subrequest free-tier budget and the tick died before the page
+    // persist — the job sat 'queued' forever. One page must cost ONE DB call.
+    mockGetSpotifyPlaylistItems.mockResolvedValueOnce({
+      items: Array.from({ length: 50 }, (_, i) => ({
+        id: `sp${i}`, isrc: null, title: `T${i}`, artist: "A", album: null, duration_ms: 1000,
+      })),
+      hasMore: true,
+      cursor: "next-url",
+    });
+
+    await runFetchPhaseStep(mockEnv, makeJob());
+
+    expect(mockTransaction).toHaveBeenCalledOnce();
+    expect(mockBuildUpsertQueries.mock.calls[0][1]).toHaveLength(50);
+    expect(mockInsertFetchedPage).toHaveBeenCalledOnce();
   });
 });
 
@@ -140,7 +166,7 @@ describe("runFetchPhaseStep — tidal_to_spotify", () => {
 
     expect(mockGetPlaylistItems).toHaveBeenCalledWith(mockEnv, "tidal-src", null);
     expect(mockResolveTrackArtists).toHaveBeenCalledWith(mockEnv, ["td1"]);
-    expect(mockUpsertTracks).not.toHaveBeenCalled();
+    expect(mockTransaction).not.toHaveBeenCalled();
     expect(mockInsertFetchedPage).toHaveBeenCalledWith(
       mockEnv,
       "job-1",
