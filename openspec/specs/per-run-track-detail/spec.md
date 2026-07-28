@@ -102,7 +102,7 @@ The orchestrator SHALL pass the current run's `runId` to the unmatched write hel
 - **WHEN** the orchestrator's match path determines a track is unmatched during run `<run-id>` and writes the row
 - **THEN** the resulting `unmatched` row's `sync_run_id` equals `<run-id>` alongside its `reason`, `attempts`, and `last_attempt_at`
 
-## Additional Requirements (pick-from-fuzzy-candidates, 2026-05-17)
+<!-- The requirements below were added by change pick-from-fuzzy-candidates (2026-05-17). -->
 
 ### Requirement: Orchestrator persists top-3 candidates on fuzzy rejection
 
