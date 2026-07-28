@@ -27,9 +27,9 @@ value MUST NOT appear in any log line.
 - **THEN** the publish request carries no `Authorization` header
 
 ### Requirement: Every finished sync run publishes an outcome notification
-After `runSync` produces a final result with outcome `succeeded`, `partial`, or
-`failed`, the Worker SHALL publish one notification to `{NTFY_URL}/{NTFY_TOPIC}` via
-HTTP POST with headers per https://docs.ntfy.sh/publish/: `Title` of
+The Worker SHALL publish one notification to `{NTFY_URL}/{NTFY_TOPIC}` after
+`runSync` produces a final result with outcome `succeeded`, `partial`, or `failed`,
+via HTTP POST with headers per https://docs.ntfy.sh/publish/: `Title` of
 `Portage sync {outcome}`, `Priority` of `2` for `succeeded` and `4` for `partial` and
 `failed`, and `Tags` of `white_check_mark` / `warning` / `rotating_light`
 respectively. The plain-text body SHALL include the run counts (tracks seen, ISRC
@@ -55,8 +55,8 @@ route's 25 s response race. An outcome of `skipped_locked` SHALL NOT publish.
 - **THEN** no notification is published
 
 ### Requirement: Abandoned-run sweeps publish an alert
-When the pre-run `markAbandonedRuns` sweep marks one or more rows abandoned, the
-Worker SHALL publish a notification with `Title` reporting the swept count,
+The Worker SHALL publish a notification when the pre-run `markAbandonedRuns` sweep
+marks one or more rows abandoned, with `Title` reporting the swept count,
 `Priority: 4`, and `Tags: ghost`, before the new run's outcome notification. A sweep
 of zero rows SHALL NOT publish.
 
@@ -84,9 +84,10 @@ topic.
 - **THEN** the run result is unchanged and a `ntfy_notify_failed` log line is emitted
 
 ### Requirement: Orchestrator crash still notifies
-If `runSync`'s pre-lock section throws (e.g. the database is unreachable before a run
-row exists), the Worker SHALL attempt a `failed`-style notification describing the
-crash and then rethrow the original error so existing caller behavior is preserved.
+The Worker SHALL attempt a `failed`-style notification if `runSync`'s pre-lock
+section throws (e.g. the database is unreachable before a run row exists), describing
+the crash, and then rethrow the original error so existing caller behavior is
+preserved.
 
 #### Scenario: acquireLock throws
 - **WHEN** `runSync` throws before producing a result
