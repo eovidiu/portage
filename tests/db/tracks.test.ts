@@ -8,7 +8,6 @@ vi.mock("@neondatabase/serverless", () => ({
 }));
 
 import {
-  upsertTracks,
   buildUpsertQueries,
   countTracks,
   fetchPendingMatchQueue,
@@ -43,36 +42,13 @@ beforeEach(() => {
   mockQuery.mockReset();
 });
 
-describe("upsertTracks", () => {
-  it("returns 0 for empty input without calling sql", async () => {
-    const result = await upsertTracks(mockQuery as Parameters<typeof upsertTracks>[0], []);
-    expect(result).toBe(0);
-    expect(mockQuery).not.toHaveBeenCalled();
-  });
-
-  it("uses ON CONFLICT DO NOTHING in SQL", async () => {
-    mockQuery.mockResolvedValueOnce([{ spotify_id: "abc123" }]);
-    await upsertTracks(mockQuery as Parameters<typeof upsertTracks>[0], [track]);
-    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
+describe("buildUpsertQueries", () => {
+  it("uses ON CONFLICT DO NOTHING and passes all 7 columns in order", () => {
+    const mockTxSql = vi.fn().mockReturnValue(Promise.resolve([]));
+    buildUpsertQueries(mockTxSql as Parameters<typeof buildUpsertQueries>[0], [track]);
+    const [sql, params] = mockTxSql.mock.calls[0] as [string, unknown[]];
     expect(sql.toLowerCase()).toContain("on conflict");
     expect(sql.toLowerCase()).toContain("do nothing");
-  });
-
-  it("returns count of actually-inserted rows", async () => {
-    mockQuery
-      .mockResolvedValueOnce([{ spotify_id: "a" }])
-      .mockResolvedValueOnce([]);
-    const result = await upsertTracks(mockQuery as Parameters<typeof upsertTracks>[0], [
-      { ...track, spotify_id: "a" },
-      { ...track, spotify_id: "b" },
-    ]);
-    expect(result).toBe(1);
-  });
-
-  it("passes all 7 columns in correct order", async () => {
-    mockQuery.mockResolvedValueOnce([{ spotify_id: "abc123" }]);
-    await upsertTracks(mockQuery as Parameters<typeof upsertTracks>[0], [track]);
-    const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
     expect(params[0]).toBe("abc123");
     expect(params[1]).toBe("GBUM71029604");
     expect(params[2]).toBe("Artist");
@@ -82,15 +58,15 @@ describe("upsertTracks", () => {
     expect(params[6]).toBe("2026-04-25T10:00:00Z");
   });
 
-  it("passes null isrc when absent", async () => {
-    mockQuery.mockResolvedValueOnce([{ spotify_id: "x" }]);
-    await upsertTracks(mockQuery as Parameters<typeof upsertTracks>[0], [{ ...track, spotify_id: "x", isrc: null }]);
-    const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+  it("passes null isrc when absent", () => {
+    const mockTxSql = vi.fn().mockReturnValue(Promise.resolve([]));
+    buildUpsertQueries(mockTxSql as Parameters<typeof buildUpsertQueries>[0], [
+      { ...track, spotify_id: "x", isrc: null },
+    ]);
+    const [, params] = mockTxSql.mock.calls[0] as [string, unknown[]];
     expect(params[1]).toBeNull();
   });
-});
 
-describe("buildUpsertQueries", () => {
   it("returns one query per track", () => {
     const mockTxSql = vi.fn().mockReturnValue(Promise.resolve([]));
     const queries = buildUpsertQueries(

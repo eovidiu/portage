@@ -1,4 +1,4 @@
-import { neon, type NeonQueryFunction, type NeonQueryFunctionInTransaction } from "@neondatabase/serverless";
+import { neon, type NeonQueryFunctionInTransaction } from "@neondatabase/serverless";
 import type { Env } from "../env";
 
 export interface TrackRow {
@@ -19,29 +19,6 @@ export interface TrackCandidate {
   isrc: string | null;
   artist: string;
   duration_ms: number | null;
-}
-
-// Upserts a batch of tracks outside a transaction, ON CONFLICT DO NOTHING (idempotent per F-005-R8).
-// Returns the number of rows actually inserted.
-export async function upsertTracks(
-  sql: NeonQueryFunction<false, false>,
-  tracks: TrackRow[],
-): Promise<number> {
-  if (tracks.length === 0) return 0;
-
-  let inserted = 0;
-  for (const t of tracks) {
-    const rows = await sql(
-      `INSERT INTO tracks
-         (spotify_id, isrc, artist, title, album, duration_ms, spotify_added_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (spotify_id) DO NOTHING
-       RETURNING spotify_id`,
-      [t.spotify_id, t.isrc, t.artist, t.title, t.album, t.duration_ms, t.spotify_added_at],
-    );
-    if ((rows as Record<string, unknown>[]).length > 0) inserted++;
-  }
-  return inserted;
 }
 
 // Builds un-awaited upsert queries for use inside a db.transaction() sync callback.

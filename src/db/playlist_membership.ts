@@ -13,21 +13,6 @@ export interface PlaylistMembershipRow {
   added_at: string;
 }
 
-// F-017-R8: outside-transaction single-row upsert. ON CONFLICT DO NOTHING
-// preserves the original added_at on duplicate.
-export async function upsertMembership(
-  sql: NeonQueryFunction<false, false>,
-  row: PlaylistMembershipRow,
-): Promise<void> {
-  await sql(
-    `INSERT INTO playlist_membership
-       (spotify_playlist_id, spotify_track_id, added_at)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (spotify_playlist_id, spotify_track_id) DO NOTHING`,
-    [row.spotify_playlist_id, row.spotify_track_id, row.added_at],
-  );
-}
-
 // F-017-R6: builds un-awaited upsert queries for use inside db.transaction()
 // sync-callback array form. Returns one NeonQueryInTransaction per row.
 // Mirrors src/db/tracks.ts buildUpsertQueries.

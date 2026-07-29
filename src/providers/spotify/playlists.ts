@@ -6,10 +6,9 @@
 
 import { neon } from "@neondatabase/serverless";
 import { spotifyFetch } from "./oauth";
-import { buildUpsertQueries, upsertTracks, type TrackRow } from "../../db/tracks";
+import { buildUpsertQueries, type TrackRow } from "../../db/tracks";
 import {
   buildMembershipUpsertQueries,
-  upsertMembership,
   type PlaylistMembershipRow,
 } from "../../db/playlist_membership";
 import {
@@ -262,13 +261,21 @@ export async function fetchPlaylistTracks(
       inserted = upsertResults.filter(
         (r) => (r as Record<string, unknown>[]).length > 0,
       ).length;
+    } else if (tracks.length + memberships.length > 0) {
+      // Non-last pages persist tracks + memberships in ONE batched transaction
+      // (one Neon subrequest) — still outside the cursor transaction, and
+      // idempotent ON CONFLICT DO NOTHING means re-fetch on retry doesn't
+      // duplicate. Per-row upserts cost one subrequest each — a full 50-track
+      // page alone would consume the free tier's entire 50-subrequest budget.
+      const results = await db.transaction((txSql) => [
+        ...buildUpsertQueries(txSql, tracks),
+        ...buildMembershipUpsertQueries(txSql, memberships),
+      ]);
+      inserted = results
+        .slice(0, tracks.length)
+        .filter((r) => (r as Record<string, unknown>[]).length > 0).length;
     } else {
-      inserted = await upsertTracks(db, tracks);
-      // Non-last-page memberships go outside the cursor transaction. Idempotent
-      // ON CONFLICT DO NOTHING means re-fetch on retry doesn't duplicate.
-      for (const m of memberships) {
-        await upsertMembership(db, m);
-      }
+      inserted = 0;
     }
 
     totalInserted += inserted;

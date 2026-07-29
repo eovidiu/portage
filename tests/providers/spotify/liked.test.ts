@@ -122,16 +122,24 @@ function setupCursorAt(ts: string) {
   mockQuery.mockResolvedValueOnce([]); // readState sweep_max → null (F-015)
 }
 
-// Queue results for txSql calls inside a transaction.
+// Queue results for txSql calls inside the LAST page's transaction.
 // F-015: transaction now writes 3 sync_state keys (cursor + resume_url + sweep_max).
+// Does not clear the queue — beforeEach resets it, and non-last pages queue first.
 function queueTxResults(trackIds: string[]) {
-  txQueryResults.length = 0;
   for (const id of trackIds) {
     txQueryResults.push([{ spotify_id: id }]);
   }
   txQueryResults.push([]); // cursor UPSERT
   txQueryResults.push([]); // resume_url UPSERT (F-015)
   txQueryResults.push([]); // sweep_max UPSERT (F-015)
+}
+
+// Queue results for a NON-last page's batched upsert transaction (no
+// sync_state writes — cursor state only persists with the last page).
+function queueNonLastTxResults(trackIds: string[]) {
+  for (const id of trackIds) {
+    txQueryResults.push([{ spotify_id: id }]);
+  }
 }
 
 /** Capture each sync_state write that goes through the transaction. */
@@ -195,10 +203,8 @@ describe("T-005-01: cold start fetches all tracks", () => {
       .mockResolvedValueOnce(makeOkResponse(makeSpotifyPage(page1Items, "https://api.spotify.com/next")))
       .mockResolvedValueOnce(makeOkResponse(makeSpotifyPage(page2Items, null)));
 
-    // page1 = 50 non-last-page upserts via mockQuery
-    for (let i = 0; i < 50; i++) {
-      mockQuery.mockResolvedValueOnce([{ spotify_id: `t${i + 1}` }]);
-    }
+    // page1 = 50 non-last-page upserts in ONE batched transaction
+    queueNonLastTxResults(Array.from({ length: 50 }, (_, i) => `t${i + 1}`));
     // page2 = last page — 23 inserts + cursor via transaction
     queueTxResults(Array.from({ length: 23 }, (_, i) => `t${i + 51}`));
 
@@ -554,10 +560,9 @@ describe("T-005-14: one log line per page with event='fetch_page'", () => {
       .mockResolvedValueOnce(makeOkResponse(makeSpotifyPage(page2, "https://api.spotify.com/next2")))
       .mockResolvedValueOnce(makeOkResponse(makeSpotifyPage(page3, null)));
 
-    // page1 + page2: non-last-page upserts via mockQuery (80 calls)
-    for (let i = 0; i < 80; i++) {
-      mockQuery.mockResolvedValueOnce([{ spotify_id: `pt${i}` }]);
-    }
+    // page1 + page2: one batched transaction per non-last page
+    queueNonLastTxResults(Array.from({ length: 40 }, (_, i) => `p1t${i}`));
+    queueNonLastTxResults(Array.from({ length: 40 }, (_, i) => `p2t${i}`));
 
     // page3 = last page via transaction
     queueTxResults(Array.from({ length: 40 }, (_, i) => `p3t${i}`));
@@ -643,8 +648,8 @@ describe("T-005-17: 401 mid-pagination triggers refresh and retry", () => {
       .mockResolvedValueOnce(makeOkResponse(makeSpotifyPage(page1Items, "https://api.spotify.com/next")))
       .mockResolvedValueOnce(makeOkResponse(makeSpotifyPage(page2Items, null)));
 
-    // page1 = non-last via mockQuery
-    mockQuery.mockResolvedValueOnce([{ spotify_id: "p1t1" }]);
+    // page1 = non-last via its own batched transaction
+    queueNonLastTxResults(["p1t1"]);
     // page2 = last via transaction
     queueTxResults(["p2t1"]);
 
