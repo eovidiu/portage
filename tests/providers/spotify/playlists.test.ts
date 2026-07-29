@@ -446,17 +446,15 @@ describe("T-017-10: cursor cutoff stops pagination early", () => {
   });
 });
 
-describe("F-017 multi-page: non-last-page persistence outside transaction", () => {
-  it("persists each non-last page with upsertTracks + upsertMembership; final page in transaction", async () => {
+describe("F-017 multi-page: non-last-page persistence in one batched transaction", () => {
+  it("persists each non-last page's tracks + memberships in ONE transaction; final page atomic with sync_state", async () => {
     mockQuery
       .mockResolvedValueOnce([]) // cursor cold start
       .mockResolvedValueOnce([]) // resume_url empty
-      .mockResolvedValueOnce([]) // sweep_max empty
-      // Page 0 non-last: track upsert (1 track)
-      .mockResolvedValueOnce([{ spotify_id: "t1" }]) // upsertTracks
-      // Page 0 non-last: membership upsert
-      .mockResolvedValueOnce([]) // upsertMembership
-      ;
+      .mockResolvedValueOnce([]); // sweep_max empty
+
+    // Page 0 (non-last): 1 track upsert + 1 membership upsert in one transaction
+    txQueryResults.push([{ spotify_id: "t1" }], []);
 
     mockSpotifyFetch
       .mockResolvedValueOnce(

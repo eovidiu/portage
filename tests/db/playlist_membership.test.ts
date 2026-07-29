@@ -7,7 +7,6 @@ vi.mock("@neondatabase/serverless", () => ({
 }));
 
 import {
-  upsertMembership,
   buildMembershipUpsertQueries,
   markMembershipSynced,
   selectUnsyncedMatchesForPlaylist,
@@ -16,41 +15,6 @@ import {
 
 beforeEach(() => {
   mockQuery.mockReset();
-});
-
-const sampleRow: PlaylistMembershipRow = {
-  spotify_playlist_id: "abc123",
-  spotify_track_id: "track-1",
-  added_at: "2026-05-09T10:00:00Z",
-};
-
-describe("T-017-05: upsertMembership inserts a new row", () => {
-  it("issues an INSERT with ON CONFLICT DO NOTHING (idempotency)", async () => {
-    mockQuery.mockResolvedValueOnce([{ spotify_track_id: "track-1" }]);
-    await upsertMembership(
-      mockQuery as Parameters<typeof upsertMembership>[0],
-      sampleRow,
-    );
-    const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-    expect(sql.toLowerCase()).toContain("insert into playlist_membership");
-    expect(sql.toLowerCase()).toContain("on conflict");
-    expect(sql.toLowerCase()).toContain("do nothing");
-    expect(params).toEqual(["abc123", "track-1", "2026-05-09T10:00:00Z"]);
-  });
-});
-
-describe("T-017-06: upsertMembership preserves added_at on duplicate", () => {
-  it("DO NOTHING means added_at is not overwritten", async () => {
-    mockQuery.mockResolvedValueOnce([]);
-    await upsertMembership(
-      mockQuery as Parameters<typeof upsertMembership>[0],
-      sampleRow,
-    );
-    const [sql] = mockQuery.mock.calls[0] as [string, unknown[]];
-    const lower = sql.toLowerCase();
-    // Make sure we didn't accidentally write DO UPDATE SET added_at = ...
-    expect(lower).not.toContain("do update set");
-  });
 });
 
 describe("buildMembershipUpsertQueries (sync-callback array form)", () => {
@@ -69,6 +33,9 @@ describe("buildMembershipUpsertQueries (sync-callback array form)", () => {
     const [sql0, params0] = mockTxSql.mock.calls[0] as [string, unknown[]];
     expect(sql0.toLowerCase()).toContain("insert into playlist_membership");
     expect(sql0.toLowerCase()).toContain("on conflict");
+    expect(sql0.toLowerCase()).toContain("do nothing");
+    // DO NOTHING (not DO UPDATE SET) preserves the original added_at on duplicate
+    expect(sql0.toLowerCase()).not.toContain("do update set");
     expect(params0).toEqual(["abc123", "t-a", "2026-05-09T10:00:00Z"]);
   });
 

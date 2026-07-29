@@ -23,7 +23,7 @@
 
 import { neon } from "@neondatabase/serverless";
 import { spotifyFetch } from "./oauth";
-import { buildUpsertQueries, upsertTracks, type TrackRow } from "../../db/tracks";
+import { buildUpsertQueries, type TrackRow } from "../../db/tracks";
 import { readCursor, readState, buildCursorQuery } from "../../db/sync_state";
 import type { Env } from "../../env";
 
@@ -204,8 +204,14 @@ export async function fetchLikedSongs(
       ]);
       const upsertResults = results.slice(0, tracks.length);
       inserted = upsertResults.filter((r) => (r as Record<string, unknown>[]).length > 0).length;
+    } else if (tracks.length > 0) {
+      // One batched transaction per page (one Neon subrequest). Per-row
+      // upserts cost one subrequest each — a full 50-track page alone would
+      // consume the free tier's entire 50-subrequest budget.
+      const results = await db.transaction((txSql) => buildUpsertQueries(txSql, tracks));
+      inserted = results.filter((r) => (r as Record<string, unknown>[]).length > 0).length;
     } else {
-      inserted = await upsertTracks(db, tracks);
+      inserted = 0;
     }
 
     totalInserted += inserted;
