@@ -269,6 +269,17 @@ describe("addTracksToPlaylist — 429 handling (F-008-R8)", () => {
     expect(result.added).toBe(1);
   });
 
+  it("aborts immediately when Retry-After exceeds the cap, without sleeping or retrying", async () => {
+    mockTidalFetch.mockResolvedValueOnce(
+      new Response("{}", { status: 429, headers: { "Retry-After": "3600" } }),
+    );
+
+    const result = await addTracksToPlaylist(makeEnv(), "PL1", ["T1"]);
+    expect(result.added).toBe(0);
+    expect(result.errors).toBe(1);
+    expect(mockTidalFetch).toHaveBeenCalledOnce();
+  });
+
   it("aborts batch on second 429 and counts remaining as errors", async () => {
     const retryHeaders = { "Retry-After": "0" };
     // 2 batches of BATCH_SIZE each; first 429, retry 429 → abort

@@ -106,6 +106,15 @@ describe("addItems — POST /v1/playlists/{id}/items (F-030)", () => {
     expect(mockSpotifyFetch).not.toHaveBeenCalled();
   });
 
+  it("reports rateLimited immediately when Retry-After exceeds the cap, without sleeping or retrying", async () => {
+    mockSpotifyFetch.mockResolvedValueOnce(statusResponse(429, "3600"));
+
+    const result = await addItems(makeEnv(), "PLAYLIST1", ["t1"]);
+
+    expect(result).toEqual({ added: 0, snapshotId: null, rateLimited: true });
+    expect(mockSpotifyFetch).toHaveBeenCalledOnce();
+  });
+
   it("retries once on 429, honoring Retry-After, and succeeds", async () => {
     vi.useFakeTimers();
     try {

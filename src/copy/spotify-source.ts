@@ -10,6 +10,7 @@
 
 import type { Env } from "../env";
 import { spotifyFetch } from "../providers/spotify/oauth";
+import { retryAfterMs, MAX_RETRY_AFTER_S } from "../providers/retry-after";
 
 // Verified: 2026-07-18 against the same endpoint/shape already used and
 // cited in src/providers/spotify/playlists.ts
@@ -79,8 +80,13 @@ async function fetchPage(env: Env, url: string): Promise<SpotifyTracksResponse> 
   const response = await spotifyFetch(env, url);
 
   if (response.status === 429) {
-    const retryAfter = parseInt(response.headers.get("Retry-After") ?? "1", 10);
-    await sleep(retryAfter * 1000);
+    const backoffMs = retryAfterMs(response.headers.get("Retry-After"));
+    if (backoffMs === null) {
+      throw new Error(
+        `Spotify rate limit: Retry-After exceeds the ${MAX_RETRY_AFTER_S}s cap while fetching source playlist`,
+      );
+    }
+    await sleep(backoffMs);
 
     const retry = await spotifyFetch(env, url);
     if (retry.status === 429) {

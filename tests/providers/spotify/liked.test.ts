@@ -484,6 +484,25 @@ describe("T-005-11: Spotify 429 honours Retry-After", () => {
   });
 });
 
+// Oversized Retry-After aborts without sleeping (2026-07-27..29 zombie runs:
+// sleeping through an hours-long penalty box outlived the isolate, leaving
+// 'running' rows to be swept as abandoned).
+describe("oversized Retry-After aborts without sleeping", () => {
+  it("throws immediately when Retry-After exceeds the cap, without a retry call", async () => {
+    setupColdStart();
+
+    let callCount = 0;
+    vi.mocked(spotifyFetch).mockImplementation(() => {
+      callCount++;
+      return Promise.resolve(make429Response("3600"));
+    });
+
+    await expect(fetchLikedSongs(makeEnv())).rejects.toThrow("Retry-After");
+    expect(callCount).toBe(1);
+    expect(mockTransaction).not.toHaveBeenCalled();
+  });
+});
+
 // T-005-12: Second 429 fails the run
 describe("T-005-12: second 429 fails the run", () => {
   it("throws when Spotify returns 429 twice", async () => {

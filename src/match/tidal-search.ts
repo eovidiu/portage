@@ -17,6 +17,7 @@
 
 import type { Env } from "../env";
 import { tidalFetch } from "../providers/tidal/client";
+import { retryAfterMs } from "../providers/retry-after";
 import {
   parseIsoDurationMs,
   buildIncludedIndex,
@@ -128,10 +129,14 @@ export async function searchTidalCandidates(
   let retried = false;
 
   if (response.status === 429) {
-    retried = true;
-    const retryAfter = parseInt(response.headers.get("Retry-After") ?? "1", 10);
-    await sleep(Number.isFinite(retryAfter) ? retryAfter * 1000 : 1000);
-    response = await tidalFetch(env, url);
+    const backoffMs = retryAfterMs(response.headers.get("Retry-After"));
+    // A penalty above the cap skips the retry — the 429 status flows to the
+    // caller's own rate-limit mapping, same as a second 429 would.
+    if (backoffMs !== null) {
+      retried = true;
+      await sleep(backoffMs);
+      response = await tidalFetch(env, url);
+    }
   }
 
   const status = response.status;

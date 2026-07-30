@@ -148,6 +148,15 @@ describe("searchByIsrc — GET /v1/search q=isrc: (F-030)", () => {
     }
   });
 
+  it("returns rate_limited immediately when Retry-After exceeds the cap, without sleeping or retrying", async () => {
+    mockSpotifyFetch.mockResolvedValueOnce(statusResponse(429, "3600"));
+
+    const result = await searchByIsrc(makeEnv(), "USRC17607839", source);
+
+    expect(result.status).toBe("rate_limited");
+    expect(mockSpotifyFetch).toHaveBeenCalledOnce();
+  });
+
   it("returns rate_limited (not a throw) on a second consecutive 429", async () => {
     vi.useFakeTimers();
     try {
