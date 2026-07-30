@@ -65,18 +65,57 @@ describe("runLikedCleanupTick", () => {
   });
 
   it("pure-scan tick (budget exhausted mid-playlist) advances the cursor to the last kept item's itemCursor", async () => {
-    const writes = setupSql({ foreign: ["F1"] });
-    // 35 pages of kept items, every page pointing at another — budget stops the scan.
-    let page = 0;
-    mockTidalFetch.mockImplementation(async () => {
-      page++;
-      return itemsPage([{ id: `K${page}`, itemCursor: `cur-K${page}` }], `next-${page}`);
-    });
+    vi.useFakeTimers();
+    try {
+      const writes = setupSql({ foreign: ["F1"] });
+      // 35 pages of kept items, every page pointing at another — budget stops the scan.
+      let page = 0;
+      mockTidalFetch.mockImplementation(async () => {
+        page++;
+        return itemsPage([{ id: `K${page}`, itemCursor: `cur-K${page}` }], `next-${page}`);
+      });
+
+      const promise = runLikedCleanupTick(mockEnv, PLAYLIST);
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(result).toEqual({ outcome: "scan_advanced", pagesScanned: 35, deleted: 0 });
+      expect(writes).toContainEqual(["liked_cleanup_cursor", "cur-K35"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops the scan gracefully on a 429 and leaves the cursor untouched when nothing was scanned", async () => {
+    const writes = setupSql({ cursor: "resume-here", foreign: ["F1"] });
+    mockTidalFetch.mockResolvedValueOnce(new Response("", { status: 429 }));
 
     const result = await runLikedCleanupTick(mockEnv, PLAYLIST);
 
-    expect(result).toEqual({ outcome: "scan_advanced", pagesScanned: 35, deleted: 0 });
-    expect(writes).toContainEqual(["liked_cleanup_cursor", "cur-K35"]);
+    expect(result).toEqual({ outcome: "scan_advanced", pagesScanned: 0, deleted: 0 });
+    expect(writes.find(([k]) => k === "liked_cleanup_cursor")).toBeUndefined();
+    expect(writes.find(([k]) => k === "liked_cleanup_done")).toBeUndefined();
+  });
+
+  it("processes items found before a mid-scan 429 and keeps the incoming cursor after deleting", async () => {
+    vi.useFakeTimers();
+    try {
+      const writes = setupSql({ cursor: "resume-here", foreign: ["F1"] });
+      mockTidalFetch
+        .mockResolvedValueOnce(itemsPage([{ id: "F1" }], "next-1"))
+        .mockResolvedValueOnce(new Response("", { status: 429 })) // scan stops here
+        .mockResolvedValueOnce(new Response("", { status: 200 })); // DELETE
+
+      const promise = runLikedCleanupTick(mockEnv, PLAYLIST);
+      await vi.runAllTimersAsync();
+      const result = await promise;
+
+      expect(result.outcome).toBe("deleted");
+      expect(result.deleted).toBe(1);
+      expect(writes.find(([k]) => k === "liked_cleanup_cursor")).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("deletes foreign items with the OAS remove payload and does NOT advance the cursor", async () => {
@@ -132,12 +171,19 @@ describe("runLikedCleanupTick", () => {
   });
 
   it("stops scanning at the page budget", async () => {
-    setupSql({ foreign: ["F-never"] });
-    mockTidalFetch.mockImplementation(async () => itemsPage([{ id: "K" }], "more"));
+    vi.useFakeTimers();
+    try {
+      setupSql({ foreign: ["F-never"] });
+      mockTidalFetch.mockImplementation(async () => itemsPage([{ id: "K" }], "more"));
 
-    const result = await runLikedCleanupTick(mockEnv, PLAYLIST);
+      const promise = runLikedCleanupTick(mockEnv, PLAYLIST);
+      await vi.runAllTimersAsync();
+      const result = await promise;
 
-    expect(result.outcome).toBe("scan_advanced");
-    expect(result.pagesScanned).toBe(35);
+      expect(result.outcome).toBe("scan_advanced");
+      expect(result.pagesScanned).toBe(35);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
