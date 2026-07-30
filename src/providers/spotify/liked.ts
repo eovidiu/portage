@@ -24,6 +24,10 @@
 import { neon } from "@neondatabase/serverless";
 import { spotifyFetch } from "./oauth";
 import { buildUpsertQueries, type TrackRow } from "../../db/tracks";
+import {
+  buildMembershipUpsertQueries,
+  type PlaylistMembershipRow,
+} from "../../db/playlist_membership";
 import { retryAfterMs, MAX_RETRY_AFTER_S } from "../retry-after";
 import { readCursor, readState, buildCursorQuery } from "../../db/sync_state";
 import type { Env } from "../../env";
@@ -195,15 +199,26 @@ export async function fetchLikedSongs(
   const newSweepMaxToPersist = sweepComplete ? "" : newSweepMax;
 
   // Persist all pages. The last page of this invocation's inserts are atomic
-  // with the sync_state writes (I-005).
+  // with the sync_state writes (I-005). Each page also writes its own
+  // `__liked__` playlist_membership rows (F-009-R18 amended 2026-07-30):
+  // membership provenance lives HERE, where we know the tracks came from the
+  // liked-songs endpoint — deriving membership from the `tracks` table (the
+  // old orchestrator backfill) turned every copy-engine-seeded row into a
+  // phantom Liked song and poured 352 foreign tracks into the Tidal playlist.
   for (let i = 0; i < allPages.length; i++) {
     const { tracks, skipped } = allPages[i];
+    const memberships: PlaylistMembershipRow[] = tracks.map((t) => ({
+      spotify_playlist_id: "__liked__",
+      spotify_track_id: t.spotify_id,
+      added_at: t.spotify_added_at,
+    }));
     const isLastPage = i === allPages.length - 1;
     let inserted: number;
 
     if (isLastPage) {
       const results = await db.transaction((txSql) => [
         ...buildUpsertQueries(txSql, tracks),
+        ...buildMembershipUpsertQueries(txSql, memberships),
         buildCursorQuery(txSql, CURSOR_KEY, newCursor),
         buildCursorQuery(txSql, RESUME_URL_KEY, newResumeUrl),
         buildCursorQuery(txSql, SWEEP_MAX_KEY, newSweepMaxToPersist),
@@ -214,8 +229,13 @@ export async function fetchLikedSongs(
       // One batched transaction per page (one Neon subrequest). Per-row
       // upserts cost one subrequest each — a full 50-track page alone would
       // consume the free tier's entire 50-subrequest budget.
-      const results = await db.transaction((txSql) => buildUpsertQueries(txSql, tracks));
-      inserted = results.filter((r) => (r as Record<string, unknown>[]).length > 0).length;
+      const results = await db.transaction((txSql) => [
+        ...buildUpsertQueries(txSql, tracks),
+        ...buildMembershipUpsertQueries(txSql, memberships),
+      ]);
+      inserted = results
+        .slice(0, tracks.length)
+        .filter((r) => (r as Record<string, unknown>[]).length > 0).length;
     } else {
       inserted = 0;
     }

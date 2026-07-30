@@ -230,8 +230,8 @@ the cap are deferred to subsequent invocations; ordering is by
 quickly.
 
 For `__liked__`:
-- Call `fetchLikedSongs(env, LIKED_PAGES_PER_RUN)` (F-005, unmodified).
-- Then run the post-fetch __liked__ membership upsert (R18).
+- Call `fetchLikedSongs(env, LIKED_PAGES_PER_RUN)` (F-005). Membership writes
+  happen inside its page transactions (R18).
 
 For extras:
 - Call `fetchPlaylistTracks(env, spotifyPlaylistId, LIKED_PAGES_PER_RUN)`
@@ -241,26 +241,25 @@ Per-playlist fetch failures MUST be classified by F-009 R15 and logged
 without aborting subsequent playlists' fetches in the same run. (One bad
 playlist must not block others.)
 
-### R18 — Post-fetch __liked__ membership upsert
+### R18 — __liked__ membership written by the liked fetch (amended 2026-07-30)
 
-After `fetchLikedSongs` returns, the orchestrator MUST upsert
-`playlist_membership` rows for the synthetic `__liked__` playlist for any
-tracks not already present:
+`fetchLikedSongs` MUST upsert a `playlist_membership` row
+(`spotify_playlist_id = '__liked__'`, `added_at` = the track's Spotify
+`added_at`, `synced_at` NULL) for every track it fetches, inside the same
+per-page transaction that persists the page's `tracks` rows — mirroring
+F-017's `fetchPlaylistTracks`. The upserts are idempotent via
+ON CONFLICT DO NOTHING, and membership MUST be written for every fetched
+track regardless of whether its `tracks` row already existed.
 
-```sql
-INSERT INTO playlist_membership (spotify_playlist_id, spotify_track_id, added_at, synced_at)
-SELECT '__liked__', t.spotify_id, t.spotify_added_at, NULL
-FROM tracks t
-LEFT JOIN playlist_membership pm
-  ON pm.spotify_playlist_id = '__liked__' AND pm.spotify_track_id = t.spotify_id
-WHERE pm.spotify_track_id IS NULL
-ON CONFLICT DO NOTHING;
-```
-
-This is the orchestrator's responsibility (NOT `liked.ts`'s) per F-017's
-"`fetchLikedSongs` UNMODIFIED" guarantee. The query is idempotent: rows
-already present are skipped via the LEFT JOIN; the ON CONFLICT DO NOTHING
-is a defensive belt-and-suspenders. Cost: one DB round-trip per run.
+The orchestrator MUST NOT derive `__liked__` membership from the `tracks`
+table. The original R18 backfill
+(`INSERT ... SELECT FROM tracks LEFT JOIN playlist_membership ...`) assumed
+`tracks` contained only liked songs; once F-030's copy engine began seeding
+`tracks` with arbitrary copy-source tracks, the backfill turned all of them
+into phantom Liked members and the write pass pushed 352 foreign tracks
+into the Tidal playlist (2026-07-28..30 incident). Membership provenance
+belongs at the fetch site, which is the only place that knows where a track
+came from.
 
 ### R19 — Per-playlist write loop
 

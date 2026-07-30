@@ -120,18 +120,16 @@ const DEFAULT_CONFIGS = [
 // Set up the lock + HTTP-query sequence for a standard successful run.
 // mockClient.query handles the WS-session lock pair (acquire + unlock).
 // mockSql handles the HTTP-driver queries (listPlaylistConfigs SELECT,
-// membership upsert INSERT, fetchPendingMatchQueue SELECT).
+// fetchPendingMatchQueue SELECT).
 function setupSqlSuccess() {
   mockClient.query
     .mockResolvedValueOnce({ rows: [{ acquired: true }] }) // pg_try_advisory_lock
     .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] }); // pg_advisory_unlock
   // mockSql call sequence inside runSyncBody:
   // 1. listPlaylistConfigs SELECT (returns playlist rows)
-  // 2. __liked__ membership upsert INSERT...SELECT (R18)
-  // 3. fetchPendingMatchQueue SELECT (returns [] for no pending tracks)
+  // 2. fetchPendingMatchQueue SELECT (returns [] for no pending tracks)
   mockSql
     .mockResolvedValueOnce(DEFAULT_CONFIGS)  // listPlaylistConfigs
-    .mockResolvedValueOnce([])               // __liked__ membership upsert
     .mockResolvedValueOnce([]);              // fetchPendingMatchQueue
 }
 
@@ -207,7 +205,7 @@ beforeEach(() => {
   mockPool.end.mockResolvedValue(undefined);
   // F-016b: mockSql is also used by listPlaylistConfigs inside the module,
   // but those calls go through the module mock; mockSql is the raw neon() surface
-  // for direct SQL calls in the orchestrator (membership upsert, fetchPendingMatchQueue).
+  // for direct SQL calls in the orchestrator (fetchPendingMatchQueue).
   mockSql.mockResolvedValue([]);
 });
 
@@ -695,7 +693,6 @@ describe("F-015: bounded per-invocation budgets", () => {
     // fetchLikedSongs called with maxPages = 1
     expect(mockFetchLikedSongs).toHaveBeenCalledWith(expect.anything(), 1);
     // fetchPendingMatchQueue: find the neon() call whose params are [N] (the queue limit).
-    // mockSql call[0] is the __liked__ membership upsert; call[1] is fetchPendingMatchQueue.
     const queueCall = mockSql.mock.calls.find(
       (call) => Array.isArray(call[1]) && (call[1] as unknown[]).length === 1 && typeof (call[1] as unknown[])[0] === "number",
     ) as [string, unknown[]] | undefined;
@@ -900,13 +897,11 @@ describe("T-009-22: processes __liked__ + extras within cap", () => {
         last_synced_at: null,
       },
     ];
-    // mockSql: membership upsert + fetchPendingMatchQueue
+    // mockSql: fetchPendingMatchQueue
     mockClient.query
       .mockResolvedValueOnce({ rows: [{ acquired: true }] })
       .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] });
-    mockSql
-      .mockResolvedValueOnce([])    // __liked__ membership upsert
-      .mockResolvedValueOnce([]);   // fetchPendingMatchQueue
+    mockSql.mockResolvedValueOnce([]); // fetchPendingMatchQueue
     setupProviders({ playlistConfigs: configs });
 
     const env = { ...makeEnv(), MAX_PLAYLISTS_PER_RUN: "3" };
@@ -941,9 +936,7 @@ describe("T-009-22: processes __liked__ + extras within cap", () => {
     mockClient.query
       .mockResolvedValueOnce({ rows: [{ acquired: true }] })
       .mockResolvedValueOnce({ rows: [{ pg_advisory_unlock: true }] });
-    mockSql
-      .mockResolvedValueOnce([])   // __liked__ membership upsert
-      .mockResolvedValueOnce([]);  // fetchPendingMatchQueue
+    mockSql.mockResolvedValueOnce([]); // fetchPendingMatchQueue
     setupProviders({ playlistConfigs: configs });
 
     await runSync(makeEnv());
@@ -959,28 +952,26 @@ describe("T-009-22: processes __liked__ + extras within cap", () => {
 });
 
 // ---------------------------------------------------------------------------
-// T-009-23: orchestrator emits the post-fetch __liked__ membership upsert (R18)
+// T-009-23 (amended 2026-07-30): the orchestrator MUST NOT derive __liked__
+// membership from the tracks table. The old R18 backfill turned every
+// copy-engine-seeded `tracks` row into a phantom Liked member and wrote 352
+// foreign tracks into the Tidal playlist. Membership is fetchLikedSongs's
+// responsibility (tested in tests/providers/spotify/liked.test.ts).
 // ---------------------------------------------------------------------------
-describe("T-009-23: post-fetch __liked__ membership upsert emitted", () => {
-  it("calls mockSql with an INSERT...SELECT...LEFT JOIN for __liked__ membership after fetchLikedSongs", async () => {
+describe("T-009-23: no tracks-table membership backfill in the orchestrator", () => {
+  it("issues no INSERT INTO playlist_membership ... FROM tracks query", async () => {
     setupSqlSuccess();
     setupProviders();
 
     await runSync(makeEnv());
 
-    // The R18 upsert is the first direct mockSql call in runSyncBody.
-    // Its SQL contains the __liked__ literal and the LEFT JOIN pattern.
-    const membershipUpsertCall = mockSql.mock.calls.find(
+    const backfillCall = mockSql.mock.calls.find(
       (call) =>
         typeof call[0] === "string" &&
-        (call[0] as string).includes("__liked__") &&
-        (call[0] as string).toLowerCase().includes("left join"),
+        /INSERT INTO playlist_membership/i.test(call[0] as string) &&
+        /FROM tracks/i.test(call[0] as string),
     );
-    expect(membershipUpsertCall).toBeDefined();
-    const sql = membershipUpsertCall![0] as string;
-    expect(sql).toMatch(/INSERT INTO playlist_membership/i);
-    expect(sql).toMatch(/'__liked__'/);
-    expect(sql).toMatch(/ON CONFLICT DO NOTHING/i);
+    expect(backfillCall).toBeUndefined();
   });
 });
 
