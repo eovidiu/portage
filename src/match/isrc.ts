@@ -1,5 +1,6 @@
 import { neon } from "@neondatabase/serverless";
 import { tidalFetch } from "../providers/tidal/client";
+import { retryAfterMs } from "../providers/retry-after";
 import { insertMatch } from "../db/matches";
 import { artistAgrees } from "./artist";
 import {
@@ -111,8 +112,13 @@ async function fetchByIsrc(
   const first = await tidalFetch(env, url);
   if (first.status !== 429) return { response: first, retried: false };
 
-  const retryAfter = parseInt(first.headers.get("Retry-After") ?? "1", 10);
-  await sleep(retryAfter * 1000);
+  const backoffMs = retryAfterMs(first.headers.get("Retry-After"));
+  if (backoffMs === null) {
+    // Penalty exceeds the cap — hand the 429 back unretried; the caller's
+    // second-429 path records the per-track error and the next run retries.
+    return { response: first, retried: false };
+  }
+  await sleep(backoffMs);
 
   const second = await tidalFetch(env, url);
   return { response: second, retried: true };

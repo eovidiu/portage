@@ -100,6 +100,19 @@ describe("searchTidalCandidates — 429 retry semantics", () => {
     expect(result.candidates).toHaveLength(2);
   });
 
+  it("returns the 429 without sleeping or retrying when Retry-After exceeds the cap", async () => {
+    mockTidalFetch.mockResolvedValueOnce(
+      new Response("", { status: 429, headers: { "Retry-After": "3600" } }),
+    );
+
+    const result = await searchTidalCandidates(env, "Metallica One");
+
+    expect(mockTidalFetch).toHaveBeenCalledOnce();
+    expect(result.retried).toBe(false);
+    expect(result.status).toBe(429);
+    expect(result.candidates).toEqual([]);
+  });
+
   it("returns 429 status when the retry also 429s (no third call)", async () => {
     mockTidalFetch
       .mockResolvedValueOnce(

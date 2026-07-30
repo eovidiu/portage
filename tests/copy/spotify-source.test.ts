@@ -133,6 +133,19 @@ describe("getSpotifyPlaylistItems", () => {
     vi.useRealTimers();
   });
 
+  it("throws immediately without sleeping when Retry-After exceeds the cap", async () => {
+    mockSpotifyFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 429,
+      headers: new Headers({ "Retry-After": "3600" }),
+    } as Response);
+
+    await expect(getSpotifyPlaylistItems(mockEnv, "playlist-1", null)).rejects.toThrow(
+      /Retry-After/,
+    );
+    expect(mockSpotifyFetch).toHaveBeenCalledOnce();
+  });
+
   it("throws when the response is a non-ok, non-429 status", async () => {
     mockSpotifyFetch.mockResolvedValueOnce({ ok: false, status: 500 } as Response);
     await expect(getSpotifyPlaylistItems(mockEnv, "playlist-1", null)).rejects.toThrow(/500/);

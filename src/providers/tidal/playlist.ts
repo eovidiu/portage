@@ -1,5 +1,6 @@
 import type { Env } from "../../env";
 import { tidalFetch } from "./client";
+import { retryAfterMs } from "../retry-after";
 import {
   BATCH_SIZE,
   PLAYLIST_ACCESS_TYPE,
@@ -176,8 +177,11 @@ async function _addBatch(
   });
 
   if (first.status === 429) {
-    const retryAfter = parseInt(first.headers.get("Retry-After") ?? "1", 10);
-    await sleep(retryAfter * 1000);
+    const backoffMs = retryAfterMs(first.headers.get("Retry-After"));
+    if (backoffMs === null) {
+      return { added: 0, invalidIds: [], errors: batch.length, aborted: true };
+    }
+    await sleep(backoffMs);
     const second = await tidalFetch(env, playlistTracksUrl(playlistId), {
       method: "POST",
       body,

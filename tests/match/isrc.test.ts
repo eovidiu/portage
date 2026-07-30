@@ -290,6 +290,20 @@ describe("T-006-10: second 429 records error and falls through", () => {
   });
 });
 
+// Oversized Retry-After skips the sleep + retry entirely
+describe("oversized Retry-After records the 429 without sleeping", () => {
+  it("hands the first 429 to the per-track error path when Retry-After exceeds the cap", async () => {
+    mockTidalFetch.mockResolvedValueOnce(tidalStatus(429, { "Retry-After": "3600" }));
+
+    const result = await matchByIsrc(makeEnv(), [makeTrack()]);
+
+    expect(result.matched).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].error_code).toBe("tidal_429");
+    expect(mockTidalFetch).toHaveBeenCalledOnce();
+  });
+});
+
 // T-006-12: countryCode parameter present on requests
 describe("T-006-12: countryCode parameter present on requests", () => {
   it("passes URL with ISRC filter and include=artists to tidalFetch", async () => {

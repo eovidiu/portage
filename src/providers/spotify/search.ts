@@ -21,6 +21,7 @@
 
 import type { Env } from "../../env";
 import { spotifyFetch } from "./oauth";
+import { retryAfterMs } from "../retry-after";
 import { artistAgrees } from "../../match/artist";
 import type { SpotifyTrackInput, ResolvedTidalCandidate } from "../../match/score";
 
@@ -66,8 +67,11 @@ async function fetchSearch(env: Env, q: string): Promise<SearchOutcome> {
   const first = await spotifyFetch(env, url);
 
   if (first.status === 429) {
-    const retryAfter = parseInt(first.headers.get("Retry-After") ?? "1", 10);
-    await sleep(retryAfter * 1000);
+    const backoffMs = retryAfterMs(first.headers.get("Retry-After"));
+    if (backoffMs === null) {
+      return { status: "rate_limited" };
+    }
+    await sleep(backoffMs);
 
     const second = await spotifyFetch(env, url);
     if (second.status === 429) {

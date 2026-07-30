@@ -7,6 +7,7 @@
 import { neon } from "@neondatabase/serverless";
 import { spotifyFetch } from "./oauth";
 import { buildUpsertQueries, type TrackRow } from "../../db/tracks";
+import { retryAfterMs, MAX_RETRY_AFTER_S } from "../retry-after";
 import {
   buildMembershipUpsertQueries,
   type PlaylistMembershipRow,
@@ -103,8 +104,13 @@ async function fetchPlaylistPage(env: Env, url: string): Promise<PlaylistTracksP
   const response = await spotifyFetch(env, url);
 
   if (response.status === 429) {
-    const retryAfter = parseInt(response.headers.get("Retry-After") ?? "1", 10);
-    await new Promise((r) => setTimeout(r, retryAfter * 1000));
+    const backoffMs = retryAfterMs(response.headers.get("Retry-After"));
+    if (backoffMs === null) {
+      throw new Error(
+        `Spotify rate limit: Retry-After exceeds the ${MAX_RETRY_AFTER_S}s cap, aborting run`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, backoffMs));
 
     const retryResponse = await spotifyFetch(env, url);
     if (retryResponse.status === 429) {
@@ -325,8 +331,13 @@ async function fetchMePlaylistsPage(env: Env, url: string): Promise<MePlaylistsR
   const response = await spotifyFetch(env, url);
 
   if (response.status === 429) {
-    const retryAfter = parseInt(response.headers.get("Retry-After") ?? "1", 10);
-    await new Promise((r) => setTimeout(r, retryAfter * 1000));
+    const backoffMs = retryAfterMs(response.headers.get("Retry-After"));
+    if (backoffMs === null) {
+      throw new Error(
+        `Spotify rate limit: Retry-After exceeds the ${MAX_RETRY_AFTER_S}s cap, aborting playlist list`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, backoffMs));
 
     const retryResponse = await spotifyFetch(env, url);
     if (retryResponse.status === 429) {

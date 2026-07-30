@@ -13,6 +13,7 @@
 
 import type { Env } from "../../env";
 import { spotifyFetch } from "./oauth";
+import { retryAfterMs } from "../retry-after";
 
 const SPOTIFY_ME_PLAYLISTS_URL = "https://api.spotify.com/v1/me/playlists";
 const SPOTIFY_PLAYLISTS_URL = "https://api.spotify.com/v1/playlists";
@@ -89,8 +90,11 @@ export async function addItems(
   const first = await spotifyFetch(env, url, { method: "POST", headers: JSON_HEADERS, body });
 
   if (first.status === 429) {
-    const retryAfter = parseInt(first.headers.get("Retry-After") ?? "1", 10);
-    await sleep(retryAfter * 1000);
+    const backoffMs = retryAfterMs(first.headers.get("Retry-After"));
+    if (backoffMs === null) {
+      return { added: 0, snapshotId: null, rateLimited: true };
+    }
+    await sleep(backoffMs);
 
     const second = await spotifyFetch(env, url, { method: "POST", headers: JSON_HEADERS, body });
     if (second.status === 429) {

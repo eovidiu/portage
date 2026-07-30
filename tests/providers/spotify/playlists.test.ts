@@ -364,6 +364,20 @@ describe("T-017-14: skips null tracks, is_local, non-track items", () => {
   });
 });
 
+describe("oversized Retry-After aborts without sleeping", () => {
+  it("throws immediately when Retry-After exceeds the cap, without a retry call", async () => {
+    mockQuery
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    mockSpotifyFetch.mockResolvedValueOnce(make429Response("3600"));
+
+    await expect(fetchPlaylistTracks(makeEnv(), "abc123", 1)).rejects.toThrow(/Retry-After/);
+    expect(mockSpotifyFetch).toHaveBeenCalledOnce();
+  });
+});
+
 describe("T-017-15: 429 retry honours Retry-After", () => {
   it("waits and retries once on 429", async () => {
     vi.useFakeTimers();
