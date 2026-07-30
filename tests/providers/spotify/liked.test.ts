@@ -122,23 +122,30 @@ function setupCursorAt(ts: string) {
   mockQuery.mockResolvedValueOnce([]); // readState sweep_max → null (F-015)
 }
 
-// Queue results for txSql calls inside the LAST page's transaction.
-// F-015: transaction now writes 3 sync_state keys (cursor + resume_url + sweep_max).
+// Queue results for txSql calls inside the LAST page's transaction:
+// track upserts, then __liked__ membership upserts (R18 amended), then the
+// 3 sync_state keys (cursor + resume_url + sweep_max, F-015).
 // Does not clear the queue — beforeEach resets it, and non-last pages queue first.
 function queueTxResults(trackIds: string[]) {
   for (const id of trackIds) {
     txQueryResults.push([{ spotify_id: id }]);
+  }
+  for (const _ of trackIds) {
+    txQueryResults.push([]); // __liked__ membership upsert per track
   }
   txQueryResults.push([]); // cursor UPSERT
   txQueryResults.push([]); // resume_url UPSERT (F-015)
   txQueryResults.push([]); // sweep_max UPSERT (F-015)
 }
 
-// Queue results for a NON-last page's batched upsert transaction (no
-// sync_state writes — cursor state only persists with the last page).
+// Queue results for a NON-last page's batched transaction: track upserts then
+// membership upserts (no sync_state writes — those persist with the last page).
 function queueNonLastTxResults(trackIds: string[]) {
   for (const id of trackIds) {
     txQueryResults.push([{ spotify_id: id }]);
+  }
+  for (const _ of trackIds) {
+    txQueryResults.push([]); // __liked__ membership upsert per track
   }
 }
 
@@ -481,6 +488,40 @@ describe("T-005-11: Spotify 429 honours Retry-After", () => {
     expect(callCount).toBe(2);
 
     vi.useRealTimers();
+  });
+});
+
+// R18 (amended 2026-07-30): each page's transaction writes __liked__
+// membership for exactly the tracks fetched from the liked endpoint —
+// membership provenance lives here, never derived from the tracks table.
+describe("R18: liked fetch writes __liked__ membership in its page transactions", () => {
+  it("upserts one membership row per fetched track with the track's added_at", async () => {
+    setupColdStart();
+
+    const items = [
+      makeTrack("m1", "2026-07-30T10:00:00Z"),
+      makeTrack("m2", "2026-07-30T09:00:00Z"),
+    ];
+    vi.mocked(spotifyFetch).mockResolvedValueOnce(makeOkResponse(makeSpotifyPage(items, null)));
+    queueTxResults(["m1", "m2"]);
+
+    const membershipParams: unknown[][] = [];
+    mockTxSql.mockImplementation((_sql: string, params: unknown[]) => {
+      if (typeof _sql === "string" && _sql.includes("INSERT INTO tracks")) {
+        return Promise.resolve([{ spotify_id: (params as string[])[0] }]);
+      }
+      if (typeof _sql === "string" && _sql.includes("INSERT INTO playlist_membership")) {
+        membershipParams.push(params);
+      }
+      return Promise.resolve([]);
+    });
+
+    await fetchLikedSongs(makeEnv());
+
+    expect(membershipParams).toEqual([
+      ["__liked__", "m1", "2026-07-30T10:00:00Z"],
+      ["__liked__", "m2", "2026-07-30T09:00:00Z"],
+    ]);
   });
 });
 

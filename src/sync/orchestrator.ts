@@ -132,19 +132,11 @@ async function runSyncBody(
     return { outcome: "failed", run_id: runId, error_code: errorCode };
   }
 
-  // F-009-R18: post-fetch __liked__ membership upsert. After fetchLikedSongs
-  // returns, backfill playlist_membership for any tracks not already present.
-  // One DB round-trip per run; idempotent via LEFT JOIN + ON CONFLICT DO NOTHING.
-  await sql(
-    `INSERT INTO playlist_membership (spotify_playlist_id, spotify_track_id, added_at, synced_at)
-     SELECT '__liked__', t.spotify_id, t.spotify_added_at, NULL
-     FROM tracks t
-     LEFT JOIN playlist_membership pm
-       ON pm.spotify_playlist_id = '__liked__' AND pm.spotify_track_id = t.spotify_id
-     WHERE pm.spotify_track_id IS NULL
-     ON CONFLICT DO NOTHING`,
-    [],
-  );
+  // F-009-R18 (amended 2026-07-30): __liked__ membership is written by
+  // fetchLikedSongs inside its page transactions — the orchestrator holds no
+  // membership responsibility. The old tracks-table backfill here treated
+  // every `tracks` row as a Liked song, so the copy engine's FK-seeded rows
+  // became phantom Liked members (the 2026-07-28..30 incident).
 
   // F-009-R17 extras: fetch each extra playlist, logging errors without aborting.
   let extrasTracksSeen = 0;
