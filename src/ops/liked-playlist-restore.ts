@@ -34,13 +34,30 @@ interface ItemsPage {
   nextCursor: string | null;
 }
 
+// Pause between sequential page reads — 35 back-to-back GETs trip Tidal's
+// per-second rate limit (observed: first live tick died with HTTP 429 on the
+// items read). ~4 req/s stays under it; the sleep burns wall clock, not CPU.
+const PAGE_READ_PAUSE_MS = 250;
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 // Verified: 2026-07-30 live probe — data[] identifiers carry
 // meta.itemId + meta.itemCursor without any include flag
 // (openapi-types.ts:20608-20625, Playlists_Items_Resource_Identifier_Meta).
-async function readItemsPage(env: Env, playlistId: string, cursor: string | null): Promise<ItemsPage> {
+async function readItemsPage(
+  env: Env,
+  playlistId: string,
+  cursor: string | null,
+): Promise<ItemsPage | "rate_limited"> {
   let url = playlistTracksUrl(playlistId);
   if (cursor) url += `?page[cursor]=${encodeURIComponent(cursor)}`;
   const response = await tidalFetch(env, url);
+  // A 429 ends this tick's scan gracefully — whatever was found so far is
+  // still processed, pure-scan progress is still anchored, and the next
+  // cron tick resumes. No sleep-and-retry: that's the zombie-isolate trap.
+  if (response.status === 429) return "rate_limited";
   if (!response.ok) throw new Error(`liked cleanup: items page HTTP ${response.status}`);
   const json = (await response.json()) as {
     data?: Array<{ id: string; meta?: { itemId?: string; itemCursor?: string } }>;
@@ -106,7 +123,9 @@ export async function runLikedCleanupTick(env: Env, playlistId: string): Promise
   let reachedEnd = false;
 
   while (pages < PAGE_BUDGET && found.length < MAX_DELETES_PER_TICK) {
+    if (pages > 0) await sleep(PAGE_READ_PAUSE_MS);
     const page = await readItemsPage(env, playlistId, cursor);
+    if (page === "rate_limited") break;
     pages++;
     for (const ref of page.refs) {
       if (foreign.has(ref.id) && ref.itemId !== null) {
@@ -135,7 +154,11 @@ export async function runLikedCleanupTick(env: Env, playlistId: string): Promise
 
   if (found.length === 0) {
     // Pure scan: safe to anchor on the last kept item and continue from here.
-    await writeState(db, CURSOR_KEY, lastKeptCursor ?? "");
+    // A tick that scanned nothing (e.g. 429 on the first page) leaves the
+    // cursor untouched rather than resetting progress.
+    if (lastKeptCursor !== null) {
+      await writeState(db, CURSOR_KEY, lastKeptCursor);
+    }
     console.log(JSON.stringify({ event: "liked_cleanup_tick", pages_scanned: pages, deleted: 0 }));
     return { outcome: "scan_advanced", pagesScanned: pages, deleted: 0 };
   }
