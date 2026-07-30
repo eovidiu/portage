@@ -30,7 +30,7 @@ interface ItemRef {
 }
 
 interface ItemsPage {
-  refs: Array<{ id: string; itemId: string | null; itemCursor: string | null }>;
+  refs: Array<{ id: string; itemId: string | null }>;
   nextCursor: string | null;
 }
 
@@ -50,7 +50,7 @@ async function readItemsPage(
   env: Env,
   playlistId: string,
   cursor: string | null,
-): Promise<ItemsPage | "rate_limited"> {
+): Promise<ItemsPage | "rate_limited" | "bad_cursor"> {
   let url = playlistTracksUrl(playlistId);
   if (cursor) url += `?page[cursor]=${encodeURIComponent(cursor)}`;
   const response = await tidalFetch(env, url);
@@ -58,16 +58,19 @@ async function readItemsPage(
   // still processed, pure-scan progress is still anchored, and the next
   // cron tick resumes. No sleep-and-retry: that's the zombie-isolate trap.
   if (response.status === 429) return "rate_limited";
+  // A 400 with a cursor means the persisted cursor no longer resolves (e.g.
+  // it was anchored near items a previous tick deleted). Self-heal by
+  // restarting the scan — the shrinking foreign set makes re-scans converge.
+  if (response.status === 400 && cursor !== null) return "bad_cursor";
   if (!response.ok) throw new Error(`liked cleanup: items page HTTP ${response.status}`);
   const json = (await response.json()) as {
-    data?: Array<{ id: string; meta?: { itemId?: string; itemCursor?: string } }>;
+    data?: Array<{ id: string; meta?: { itemId?: string } }>;
     links?: { meta?: { nextCursor?: string } };
   };
   return {
     refs: (json.data ?? []).map((d) => ({
       id: d.id,
       itemId: typeof d.meta?.itemId === "string" ? d.meta.itemId : null,
-      itemCursor: typeof d.meta?.itemCursor === "string" ? d.meta.itemCursor : null,
     })),
     nextCursor: json.links?.meta?.nextCursor ?? null,
   };
@@ -118,7 +121,10 @@ export async function runLikedCleanupTick(env: Env, playlistId: string): Promise
   let cursor = (await readState(db, CURSOR_KEY)) || null;
 
   const found: ItemRef[] = [];
-  let lastKeptCursor: string | null = null;
+  // Page cursor after the last FULLY scanned page — the only value
+  // `page[cursor]` accepts is the server's links.meta.nextCursor (an
+  // item-level meta.itemCursor is a different namespace; Tidal answers 400).
+  let scannedThroughCursor: string | null = null;
   let pages = 0;
   let reachedEnd = false;
 
@@ -126,12 +132,15 @@ export async function runLikedCleanupTick(env: Env, playlistId: string): Promise
     if (pages > 0) await sleep(PAGE_READ_PAUSE_MS);
     const page = await readItemsPage(env, playlistId, cursor);
     if (page === "rate_limited") break;
+    if (page === "bad_cursor") {
+      await writeState(db, CURSOR_KEY, "");
+      console.log(JSON.stringify({ event: "liked_cleanup_cursor_reset", pages_scanned: pages }));
+      return { outcome: "scan_advanced", pagesScanned: pages, deleted: 0 };
+    }
     pages++;
     for (const ref of page.refs) {
-      if (foreign.has(ref.id) && ref.itemId !== null) {
-        if (found.length < MAX_DELETES_PER_TICK) found.push({ id: ref.id, itemId: ref.itemId });
-      } else if (ref.itemCursor !== null) {
-        lastKeptCursor = ref.itemCursor;
+      if (foreign.has(ref.id) && ref.itemId !== null && found.length < MAX_DELETES_PER_TICK) {
+        found.push({ id: ref.id, itemId: ref.itemId });
       }
     }
     if (page.nextCursor === null) {
@@ -139,6 +148,7 @@ export async function runLikedCleanupTick(env: Env, playlistId: string): Promise
       break;
     }
     cursor = page.nextCursor;
+    scannedThroughCursor = page.nextCursor;
   }
 
   for (let i = 0; i < found.length; i += DELETE_BATCH_SIZE) {
@@ -153,11 +163,12 @@ export async function runLikedCleanupTick(env: Env, playlistId: string): Promise
   }
 
   if (found.length === 0) {
-    // Pure scan: safe to anchor on the last kept item and continue from here.
-    // A tick that scanned nothing (e.g. 429 on the first page) leaves the
-    // cursor untouched rather than resetting progress.
-    if (lastKeptCursor !== null) {
-      await writeState(db, CURSOR_KEY, lastKeptCursor);
+    // Pure scan (nothing deleted this tick, so no cursor can be invalidated
+    // by us): advance to the page boundary we scanned through. A tick that
+    // scanned nothing (e.g. 429 on the first page) leaves the cursor
+    // untouched rather than resetting progress.
+    if (scannedThroughCursor !== null) {
+      await writeState(db, CURSOR_KEY, scannedThroughCursor);
     }
     console.log(JSON.stringify({ event: "liked_cleanup_tick", pages_scanned: pages, deleted: 0 }));
     return { outcome: "scan_advanced", pagesScanned: pages, deleted: 0 };

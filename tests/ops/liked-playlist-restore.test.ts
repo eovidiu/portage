@@ -80,10 +80,23 @@ describe("runLikedCleanupTick", () => {
       const result = await promise;
 
       expect(result).toEqual({ outcome: "scan_advanced", pagesScanned: 35, deleted: 0 });
-      expect(writes).toContainEqual(["liked_cleanup_cursor", "cur-K35"]);
+      // Anchors on the page-level nextCursor — the only value page[cursor]
+      // accepts (an item-level itemCursor gets HTTP 400 from Tidal).
+      expect(writes).toContainEqual(["liked_cleanup_cursor", "next-35"]);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("clears the cursor and exits when Tidal answers 400 to a persisted cursor", async () => {
+    const writes = setupSql({ cursor: "stale-cursor", foreign: ["F1"] });
+    mockTidalFetch.mockResolvedValueOnce(new Response("", { status: 400 }));
+
+    const result = await runLikedCleanupTick(mockEnv, PLAYLIST);
+
+    expect(result).toEqual({ outcome: "scan_advanced", pagesScanned: 0, deleted: 0 });
+    expect(writes).toContainEqual(["liked_cleanup_cursor", ""]);
+    expect(writes.find(([k]) => k === "liked_cleanup_done")).toBeUndefined();
   });
 
   it("stops the scan gracefully on a 429 and leaves the cursor untouched when nothing was scanned", async () => {
