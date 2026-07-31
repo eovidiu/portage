@@ -176,8 +176,15 @@ export async function runLikedCleanupTick(env: Env, playlistId: string): Promise
 
   // Deleted something: keep the incoming cursor unchanged so the next tick
   // re-scans this region against the now-shrunken playlist.
+  // first_item diagnoses no-op deletes: the same itemId appearing across
+  // consecutive ticks means Tidal acknowledged the DELETE without removing.
   console.log(
-    JSON.stringify({ event: "liked_cleanup_tick", pages_scanned: pages, deleted: found.length }),
+    JSON.stringify({
+      event: "liked_cleanup_tick",
+      pages_scanned: pages,
+      deleted: found.length,
+      first_item: found[0],
+    }),
   );
   return { outcome: "deleted", pagesScanned: pages, deleted: found.length };
 }
