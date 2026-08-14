@@ -57,9 +57,9 @@
 
 ## 9. Ship and verify
 
-- [ ] 9.1 Run `npm test` and `npm run typecheck` clean
-- [ ] 9.2 Open a PR from a feature branch, never pushing to main, and merge on green CI
-- [ ] 9.3 Deploy and confirm `COPY_STATE` appears in the binding list wrangler prints
-- [ ] 9.4 Confirm the new idle outcome appears in `wrangler tail` and that no `copy_active_flag_failed` events do
-- [ ] 9.5 Confirm via the Neon control plane that the compute reaches `idle` and `active_time` stops tracking wall clock — the only check that proves the fix
-- [ ] 9.6 Record the deployed Version ID in `.harness/context_summary.md` Active Context
+- [x] 9.1 Run `npm test` and `npm run typecheck` clean
+- [x] 9.2 Open a PR from a feature branch, never pushing to main, and merge on green CI
+- [x] 9.3 Deploy and confirm `COPY_STATE` appears in the binding list wrangler prints
+- [x] 9.4 Confirm the new idle outcome appears in `wrangler tail` and that no `copy_active_flag_failed` events do
+- [x] 9.5 Confirm via the Neon control plane that the compute reaches `idle` and `active_time` stops tracking wall clock — the only check that proves the fix
+- [x] 9.6 Record the deployed Version ID in `.harness/context_summary.md` Active Context
