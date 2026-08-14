@@ -50,7 +50,14 @@ const mockRunMatchPhaseStep = vi.mocked(runMatchPhaseStep);
 const mockRunWritePhaseStep = vi.mocked(runWritePhaseStep);
 const mockNotifyCopyJobTerminal = vi.mocked(notifyCopyJobTerminal);
 
-const mockEnv = { DATABASE_URL: "postgresql://test" } as Env;
+const kvGet = vi.fn();
+const kvPut = vi.fn();
+const kvDelete = vi.fn();
+
+const mockEnv = {
+  DATABASE_URL: "postgresql://test",
+  COPY_STATE: { get: kvGet, put: kvPut, delete: kvDelete },
+} as unknown as Env;
 const fakeSession = { pool: {}, client: {} } as never;
 
 function makeJob(overrides: Partial<CopyJobRow> = {}): CopyJobRow {
@@ -82,14 +89,61 @@ function makeJob(overrides: Partial<CopyJobRow> = {}): CopyJobRow {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Every suite below exercises a tick that gets past the F-032 gate.
+  kvGet.mockResolvedValue("1");
+  kvPut.mockResolvedValue(undefined);
+  kvDelete.mockResolvedValue(undefined);
 });
 
 describe("Idle tick is a no-op", () => {
-  it("performs one query and exits without acquiring the lock", async () => {
+  it("clears the stale flag and exits without acquiring the lock", async () => {
     mockLoadActiveJob.mockResolvedValueOnce(null);
     const result = await runCopyTick(mockEnv);
     expect(result.outcome).toBe("idle");
     expect(mockAcquireLock).not.toHaveBeenCalled();
+    expect(kvDelete).toHaveBeenCalledWith("active_job");
+  });
+});
+
+describe("F-032: the KV flag gates the Neon query", () => {
+  it("makes zero Neon calls and never takes the lock when the flag is absent", async () => {
+    kvGet.mockResolvedValue(null);
+    const result = await runCopyTick(mockEnv);
+    expect(result.outcome).toBe("idle_flag_absent");
+    expect(mockLoadActiveJob).not.toHaveBeenCalled();
+    expect(mockAcquireLock).not.toHaveBeenCalled();
+  });
+
+  it("queries Neon and runs the tick normally when the flag is present", async () => {
+    mockLoadActiveJob.mockResolvedValueOnce(makeJob());
+    mockGetJob.mockResolvedValueOnce(makeJob());
+    mockAcquireLock.mockResolvedValueOnce(fakeSession);
+    const result = await runCopyTick(mockEnv);
+    expect(mockLoadActiveJob).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("advanced");
+  });
+
+  it("falls back to the Neon query when the KV read throws", async () => {
+    kvGet.mockRejectedValue(new Error("kv unavailable"));
+    mockLoadActiveJob.mockResolvedValueOnce(null);
+    const result = await runCopyTick(mockEnv);
+    expect(mockLoadActiveJob).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("idle");
+  });
+
+  it("falls back to the Neon query when the namespace is not bound", async () => {
+    mockLoadActiveJob.mockResolvedValueOnce(null);
+    const result = await runCopyTick({ DATABASE_URL: "postgresql://test" } as Env);
+    expect(mockLoadActiveJob).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("idle");
+  });
+
+  it("leaves the flag alone when an active job is found", async () => {
+    mockLoadActiveJob.mockResolvedValueOnce(makeJob());
+    mockGetJob.mockResolvedValueOnce(makeJob());
+    mockAcquireLock.mockResolvedValueOnce(fakeSession);
+    await runCopyTick(mockEnv);
+    expect(kvDelete).not.toHaveBeenCalled();
   });
 });
 

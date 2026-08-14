@@ -10,7 +10,9 @@ import {
   cancelJob,
   recomputeCounters,
   recomputeCountersForJobs,
+  NON_TERMINAL_STATUSES,
 } from "../../db/copy_jobs";
+import { markCopyJobActive } from "../../copy/active-flag";
 import { listTracksPage, type CopyTrackState } from "../../db/copy_job_tracks";
 import { hasSpotifyScopes } from "../../db/provider_tokens";
 import { findOwnPlaylist, resolveSourceName, directionFor, destProviderFor, type CopyProvider } from "./shared";
@@ -151,6 +153,11 @@ app.get("/jobs/:job_id", async (c) => {
   const jobId = c.req.param("job_id");
   const job = await getJob(c.env, jobId);
   if (!job) return c.json({ error: "job_not_found" }, 404);
+  // F-032 self-heal: a job whose create-time flag write was lost would never be
+  // ticked. The UI polls this endpoint for a job's whole life, so re-arming here
+  // recovers within one poll. Never releases — a terminal job here says nothing
+  // about whether some other job is active.
+  if (NON_TERMINAL_STATUSES.includes(job.status)) await markCopyJobActive(c.env);
   const counters = await recomputeCounters(c.env, jobId);
   return c.json({ ...job, ...counters });
 });

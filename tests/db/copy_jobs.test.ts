@@ -21,14 +21,25 @@ import {
   resolveWriteBatch,
   incrementConsecutiveErrors,
   resetConsecutiveErrors,
+  markStalledJobs,
   NON_TERMINAL_STATUSES,
   type CopyJobRow,
 } from "../../src/db/copy_jobs";
 
-const mockEnv = { DATABASE_URL: "postgresql://test" } as Env;
+const kvGet = vi.fn();
+const kvPut = vi.fn();
+const kvDelete = vi.fn();
+
+const mockEnv = {
+  DATABASE_URL: "postgresql://test",
+  COPY_STATE: { get: kvGet, put: kvPut, delete: kvDelete },
+} as unknown as Env;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  kvGet.mockResolvedValue(null);
+  kvPut.mockResolvedValue(undefined);
+  kvDelete.mockResolvedValue(undefined);
 });
 
 function makeRow(overrides: Partial<CopyJobRow> = {}): CopyJobRow {
@@ -376,5 +387,107 @@ describe("createJob — single-active unique index", () => {
   it("rethrows other database errors", async () => {
     mockSql.mockRejectedValueOnce(Object.assign(new Error("boom"), { code: "42P01" }));
     await expect(createJob(mockEnv, input)).rejects.toThrow("boom");
+  });
+});
+
+describe("F-032: the active-job flag follows the job lifecycle", () => {
+  const input = {
+    direction: "spotify_to_tidal",
+    source_playlist_id: "src-1",
+    source_name: "P",
+    dest_mode: "new",
+  } as const;
+
+  it("arms the flag after a successful createJob", async () => {
+    mockSql.mockResolvedValueOnce([makeRow()]);
+    await createJob(mockEnv, input);
+    expect(kvPut).toHaveBeenCalledWith("active_job", "1");
+  });
+
+  it("does not arm the flag when the single-active index rejects the insert", async () => {
+    mockSql.mockRejectedValueOnce(
+      Object.assign(new Error("duplicate key value"), { code: "23505" }),
+    );
+    expect(await createJob(mockEnv, input)).toBeNull();
+    expect(kvPut).not.toHaveBeenCalled();
+  });
+
+  it("still returns the created row when the flag write fails", async () => {
+    mockSql.mockResolvedValueOnce([makeRow()]);
+    kvPut.mockRejectedValue(new Error("kv unavailable"));
+    const row = await createJob(mockEnv, input);
+    expect(row?.job_id).toBe("job-1");
+  });
+
+  it("releases the flag when setStatus lands a terminal status", async () => {
+    mockSql.mockResolvedValueOnce([{ job_id: "job-1" }]);
+    expect(await setStatus(mockEnv, "job-1", "completed")).toBe(true);
+    expect(kvDelete).toHaveBeenCalledWith("active_job");
+  });
+
+  it("retains the flag on the non-terminal matching -> writing transition", async () => {
+    mockSql.mockResolvedValueOnce([{ job_id: "job-1" }]);
+    expect(await setStatus(mockEnv, "job-1", "writing")).toBe(true);
+    expect(kvDelete).not.toHaveBeenCalled();
+  });
+
+  it("does not release the flag when a terminal setStatus was a no-op", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    expect(await setStatus(mockEnv, "job-1", "failed")).toBe(false);
+    expect(kvDelete).not.toHaveBeenCalled();
+  });
+
+  it("releases the flag when cancelJob actually cancels a job", async () => {
+    mockSql.mockResolvedValueOnce([{ job_id: "job-1" }]);
+    expect(await cancelJob(mockEnv, "job-1")).toBe("cancelled");
+    expect(kvDelete).toHaveBeenCalledWith("active_job");
+  });
+
+  it("does not release the flag when the job was already terminal", async () => {
+    mockSql.mockResolvedValueOnce([]).mockResolvedValueOnce([{ job_id: "job-1" }]);
+    expect(await cancelJob(mockEnv, "job-1")).toBe("already_terminal");
+    expect(kvDelete).not.toHaveBeenCalled();
+  });
+});
+
+describe("F-032: markStalledJobs", () => {
+  it("fails only non-terminal jobs whose last actual change is older than the window", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    await markStalledJobs(mockEnv);
+    const [query, params] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(query).toContain("status = 'failed'");
+    expect(query).toContain("error_code = 'stalled'");
+    expect(query).toContain("finished_at = now()");
+    expect(query).toContain("status = ANY($1)");
+    expect(query).toContain("updated_at < now() - $2::interval");
+    expect(params[0]).toEqual(NON_TERMINAL_STATUSES);
+    expect(params[1]).toBe("6 hours");
+  });
+
+  it("returns the swept rows so the caller can notify for each", async () => {
+    const swept = makeRow({ status: "failed", error_code: "stalled" });
+    mockSql.mockResolvedValueOnce([swept]);
+    expect(await markStalledJobs(mockEnv)).toEqual([swept]);
+  });
+
+  it("returns an empty list when nothing is stalled", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    expect(await markStalledJobs(mockEnv)).toEqual([]);
+  });
+});
+
+describe("F-032: updated_at tracks actual change, not tick activity", () => {
+  it("makes resetConsecutiveErrors a no-op when the streak is already zero", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    await resetConsecutiveErrors(mockEnv, "job-1");
+    const [query] = mockSql.mock.calls[0] as [string];
+    expect(query).toContain("consecutive_errors <> 0");
+  });
+
+  it("skips the recomputeCounters write when no counter moved", async () => {
+    mockSql.mockResolvedValueOnce([{ state: "written", n: 5 }]).mockResolvedValueOnce([]);
+    await recomputeCounters(mockEnv, "job-1");
+    const [query] = mockSql.mock.calls[1] as [string];
+    expect(query).toContain("IS DISTINCT FROM");
   });
 });

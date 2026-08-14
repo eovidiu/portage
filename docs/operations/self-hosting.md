@@ -365,6 +365,31 @@ The queue drains more slowly but every run completes. If you upgrade to
 Workers Paid (CPU 10 ms → 50 ms, subrequests 50 → 1000), remove these
 `[vars]` entries and the defaults take over.
 
+### The database budget matters more than the Workers budget
+
+A third trigger, `*/5 * * * *`, drives the playlist-copy engine. Cron
+invocations are effectively free, but the *database* cost of an idle one is
+not. Neon's free plan suspends a compute after five minutes of inactivity and
+that timeout is not configurable, so a heartbeat that queries Postgres every
+five minutes never lets the timer expire: the compute stays awake 24/7 and
+burns the 100 CU-hour monthly allowance in roughly two weeks, doing nothing.
+
+The copy tick therefore reads an advisory flag from the `COPY_STATE` KV
+namespace before it touches Neon, and returns immediately when no job is
+active. Create the namespace once:
+
+```bash
+npx wrangler kv namespace create COPY_STATE
+```
+
+and paste the printed id into the `[[kv_namespaces]]` block in
+`wrangler.toml`. The flag is only ever a cache of `copy_jobs` — every KV
+failure falls through to the database query — so the Worker is still correct
+without the binding, just back to the old cost. If your Neon usage does not
+drop after deploying, something else is polling: check for a browser tab left
+open on a job-progress screen, or a stray
+`scripts/check-sync-progress.ts --watch`.
+
 ## 13. Troubleshooting
 
 **`/sync/run` returns `spotify_reauth_required` or `tidal_reauth_required`.**

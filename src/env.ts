@@ -44,4 +44,12 @@ export interface Env {
   COPY_BATCH_ISRC?: string;
   /** Per-tick fuzzy match batch size for the copy-job engine. Defaults to 2. (F-030) */
   COPY_BATCH_FUZZY?: string;
+  /**
+   * KV namespace holding the copy engine's advisory active-job flag. The
+   * five-minute tick reads it before touching Neon so an idle heartbeat never
+   * wakes the autosuspended compute. Non-optional because production binds it;
+   * the fail-open behaviour for a missing or broken binding lives in
+   * src/copy/active-flag.ts, not in this type. (F-032)
+   */
+  COPY_STATE: KVNamespace;
 }

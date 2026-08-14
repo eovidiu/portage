@@ -27,6 +27,19 @@ vi.mock("../../src/db/sync_runs", () => ({
   markAbandonedRuns: vi.fn(),
 }));
 
+// F-032: runSync now sweeps stalled copy jobs and reconciles the active-job
+// flag. Both go through neon(), so leaving them unmocked would consume the
+// ordered mockSql queue below and silently desynchronise every sync assertion.
+vi.mock("../../src/db/copy_jobs", () => ({
+  loadActiveJob: vi.fn(),
+  markStalledJobs: vi.fn(),
+}));
+vi.mock("../../src/copy/active-flag", () => ({
+  markCopyJobActive: vi.fn(),
+  clearCopyJobActive: vi.fn(),
+}));
+vi.mock("../../src/copy/notify", () => ({ notifyCopyJobTerminal: vi.fn() }));
+
 vi.mock("../../src/providers/spotify/liked", () => ({
   fetchLikedSongs: vi.fn(),
 }));
@@ -60,6 +73,8 @@ vi.mock("../../src/providers/spotify/playlists", () => ({
 }));
 
 import { runSync } from "../../src/sync/orchestrator";
+import { loadActiveJob, markStalledJobs } from "../../src/db/copy_jobs";
+import { markCopyJobActive, clearCopyJobActive } from "../../src/copy/active-flag";
 import { Pool } from "@neondatabase/serverless";
 import { insertRun, updateRun, markAbandonedRuns } from "../../src/db/sync_runs";
 import { fetchLikedSongs } from "../../src/providers/spotify/liked";
@@ -88,6 +103,10 @@ const mockListPlaylistConfigs = vi.mocked(listPlaylistConfigs);
 const mockListEnabledPlaylistConfigs = vi.mocked(listEnabledPlaylistConfigs);
 const mockMarkSynced = vi.mocked(markSynced);
 const mockFetchPlaylistTracks = vi.mocked(fetchPlaylistTracks);
+const mockLoadActiveJob = vi.mocked(loadActiveJob);
+const mockMarkStalledJobs = vi.mocked(markStalledJobs);
+const mockMarkCopyJobActive = vi.mocked(markCopyJobActive);
+const mockClearCopyJobActive = vi.mocked(clearCopyJobActive);
 
 function makeEnv(): Env {
   return {
@@ -151,6 +170,8 @@ function setupProviders(overrides: {
   }>;
 } = {}) {
   mockMarkAbandoned.mockResolvedValue(0);
+  mockMarkStalledJobs.mockResolvedValue([]);
+  mockLoadActiveJob.mockResolvedValue(null);
   mockInsertRun.mockResolvedValue({ run_id: "run-001" });
   mockUpdateRun.mockResolvedValue(undefined);
   mockSeedPlaylistConfigs.mockResolvedValue(undefined);
@@ -207,6 +228,10 @@ beforeEach(() => {
   // but those calls go through the module mock; mockSql is the raw neon() surface
   // for direct SQL calls in the orchestrator (fetchPendingMatchQueue).
   mockSql.mockResolvedValue([]);
+  // F-032: runSync always sweeps and reconciles copy jobs, including on the
+  // paths that never reach runSyncCore, so these need a default everywhere.
+  mockMarkStalledJobs.mockResolvedValue([]);
+  mockLoadActiveJob.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -1518,3 +1543,62 @@ describe("T-026b-04: per-playlist error preserves prior last_synced_at", () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// F-032: copy-job housekeeping hosted on the twice-daily sync path
+// ---------------------------------------------------------------------------
+describe("F-032: runSync sweeps stalled copy jobs and reconciles the flag", () => {
+  it("re-arms the flag when a non-terminal copy job exists", async () => {
+    setupSqlSuccess();
+    setupProviders();
+    mockLoadActiveJob.mockResolvedValue({ job_id: "job-1", status: "matching" } as never);
+
+    await runSync(makeEnv());
+
+    expect(mockMarkCopyJobActive).toHaveBeenCalled();
+    expect(mockClearCopyJobActive).not.toHaveBeenCalled();
+  });
+
+  it("releases the flag when no copy job is active", async () => {
+    setupSqlSuccess();
+    setupProviders();
+    mockLoadActiveJob.mockResolvedValue(null);
+
+    await runSync(makeEnv());
+
+    expect(mockClearCopyJobActive).toHaveBeenCalled();
+    expect(mockMarkCopyJobActive).not.toHaveBeenCalled();
+  });
+
+  it("sweeps before reconciling, so a job it just failed releases the flag", async () => {
+    setupSqlSuccess();
+    setupProviders();
+    mockMarkStalledJobs.mockResolvedValue([
+      { job_id: "job-1", status: "failed", error_code: "stalled" },
+    ] as never);
+    mockLoadActiveJob.mockResolvedValue(null);
+
+    await runSync(makeEnv());
+
+    expect(mockMarkStalledJobs).toHaveBeenCalled();
+    expect(mockClearCopyJobActive).toHaveBeenCalled();
+  });
+
+  it("runs the sweep before the lock is acquired, like markAbandonedRuns", async () => {
+    setupSqlSuccess();
+    setupProviders();
+    const order: string[] = [];
+    mockMarkStalledJobs.mockImplementation(async () => {
+      order.push("sweep");
+      return [];
+    });
+    mockPool.connect.mockImplementation(async () => {
+      order.push("lock");
+      return mockClient;
+    });
+
+    await runSync(makeEnv());
+
+    expect(order.indexOf("sweep")).toBeLessThan(order.indexOf("lock"));
+  });
+});
