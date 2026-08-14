@@ -19,6 +19,7 @@ import { runFetchPhaseStep } from "./fetch";
 import { runMatchPhaseStep } from "./match";
 import { runWritePhaseStep } from "./write";
 import { notifyCopyJobTerminal } from "./notify";
+import { mayHaveActiveCopyJob, clearCopyJobActive } from "./active-flag";
 import { SpotifyAuthError } from "../providers/spotify/oauth";
 import { IntegrityError } from "../crypto";
 
@@ -35,7 +36,12 @@ function readBudget(raw: string | undefined): number {
 }
 
 export interface CopyTickResult {
-  outcome: "idle" | "skipped_locked" | "advanced" | "no_active_job_after_lock";
+  outcome:
+    | "idle"
+    | "idle_flag_absent"
+    | "skipped_locked"
+    | "advanced"
+    | "no_active_job_after_lock";
   job_id?: string;
 }
 
@@ -147,10 +153,20 @@ async function handleTickError(env: Env, job: CopyJobRow, err: unknown): Promise
   }
 }
 
-/** One copy-job tick: idle fast-path, lock-or-skip, one phase step, persist. */
+/** One copy-job tick: KV gate, idle fast-path, lock-or-skip, one phase step, persist. */
 export async function runCopyTick(env: Env): Promise<CopyTickResult> {
+  // F-032: the gate in front of the Neon query. An absent flag means no active
+  // job, so the tick returns without opening a connection and the 288 daily
+  // heartbeats stop holding Neon's autosuspend timer open. A KV failure reports
+  // "maybe" and falls through to the authoritative query below.
+  if (!(await mayHaveActiveCopyJob(env))) return { outcome: "idle_flag_absent" };
+
   const active = await loadActiveJob(env);
-  if (!active) return { outcome: "idle" };
+  if (!active) {
+    // Flag set with no active row — a release that was lost. Self-heals here.
+    await clearCopyJobActive(env);
+    return { outcome: "idle" };
+  }
 
   const session = await acquireLock(env);
   if (!session) return { outcome: "skipped_locked" };

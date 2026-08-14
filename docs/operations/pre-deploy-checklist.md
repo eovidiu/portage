@@ -56,6 +56,14 @@ before deploying.
 - Playlist copy (F-030) preconditions:
   - `wrangler.toml` `crons` includes `*/5 * * * *` (copy-engine tick) and
     `[vars]` sets `COPY_BATCH_ISRC` + `COPY_BATCH_FUZZY`.
+  - `wrangler.toml` has the `[[kv_namespaces]]` block binding `COPY_STATE`
+    (F-032). Create it once with
+    `npx wrangler kv namespace create COPY_STATE` and paste the printed id —
+    wrangler does not patch TOML configs for you. Confirm `COPY_STATE`
+    appears in the binding list `wrangler deploy` prints. Without it the
+    Worker still runs correctly, but every copy tick queries Neon, which on
+    the Neon free plan holds the compute awake around the clock and exhausts
+    the monthly CU-hour quota in about two weeks.
   - The Cloudflare account has a free cron-schedule slot available
     (free tier allows 5; portage now uses 3).
   - After the first deploy with the widened Spotify scope set: re-run the

@@ -3,6 +3,7 @@
 
 import { neon } from "@neondatabase/serverless";
 import type { Env } from "../env";
+import { markCopyJobActive, clearCopyJobActive } from "../copy/active-flag";
 
 export type CopyDirection = "spotify_to_tidal" | "tidal_to_spotify";
 export type CopyDestMode = "new" | "append";
@@ -87,6 +88,9 @@ export async function createJob(env: Env, input: CreateJobInput): Promise<CopyJo
         input.dest_known_ids != null ? JSON.stringify(input.dest_known_ids) : null,
       ],
     );
+    // F-032: the only place a job becomes active. The 23505 path below creates
+    // nothing, so it must not arm the flag.
+    await markCopyJobActive(env);
     return (rows as CopyJobRow[])[0];
   } catch (err) {
     if ((err as { code?: string }).code === "23505") return null;
@@ -135,7 +139,10 @@ export async function cancelJob(env: Env, jobId: string): Promise<CancelResult> 
      RETURNING job_id`,
     [jobId, NON_TERMINAL_STATUSES],
   );
-  if ((updated as unknown[]).length > 0) return "cancelled";
+  if ((updated as unknown[]).length > 0) {
+    await clearCopyJobActive(env);
+    return "cancelled";
+  }
 
   const existing = await sql(`SELECT job_id FROM copy_jobs WHERE job_id = $1`, [jobId]);
   return (existing as unknown[]).length > 0 ? "already_terminal" : "not_found";
@@ -185,7 +192,46 @@ export async function setStatus(
      RETURNING job_id`,
     [jobId, status, extra.error_code ?? null, extra.finished_at ?? null, NON_TERMINAL_STATUSES],
   );
-  return (updated as unknown[]).length > 0;
+  const applied = (updated as unknown[]).length > 0;
+  // F-032: only terminal transitions release the flag. This function also drives
+  // the non-terminal matching -> writing hop, where releasing would make the
+  // next tick skip a live job. When `applied` is false a concurrent cancel
+  // already went terminal and released it on that path.
+  if (applied && !NON_TERMINAL_STATUSES.includes(status)) {
+    await clearCopyJobActive(env);
+  }
+  return applied;
+}
+
+/**
+ * F-032: how long a non-terminal job may show no change before it is treated as
+ * wedged. Two orders of magnitude above the observed progress cadence of the
+ * slowest real job (447 tracks over 51 h moved a counter roughly every 7 min),
+ * so a merely slow job is never at risk — only one that has stopped entirely.
+ */
+const STALLED_JOB_INTERVAL = "6 hours";
+
+/**
+ * Fails non-terminal jobs that have not changed within STALLED_JOB_INTERVAL and
+ * returns the rows it swept. `copy_jobs` otherwise has no analogue of
+ * markAbandonedRuns, so a job wedged without erroring would hold the active-job
+ * flag set forever and put the five-minute tick back on Neon around the clock.
+ *
+ * Correctness depends on `updated_at` meaning "last actual change", which is why
+ * resetConsecutiveErrors and recomputeCounters are guarded against no-op writes.
+ * A cap on `created_at` would not work: a real 447-track job legitimately ran for
+ * 2 days 3 h.
+ */
+export async function markStalledJobs(env: Env): Promise<CopyJobRow[]> {
+  const sql = neon(env.DATABASE_URL);
+  const rows = await sql(
+    `UPDATE copy_jobs
+     SET status = 'failed', error_code = 'stalled', finished_at = now(), updated_at = now()
+     WHERE status = ANY($1) AND updated_at < now() - $2::interval
+     RETURNING *`,
+    [NON_TERMINAL_STATUSES, STALLED_JOB_INTERVAL],
+  );
+  return rows as CopyJobRow[];
 }
 
 /** Persists (or clears, with `null`) the B1 batch-in-flight marker. */
@@ -253,11 +299,19 @@ export async function incrementConsecutiveErrors(env: Env, jobId: string): Promi
   return (rows as Array<{ consecutive_errors: number }>)[0]?.consecutive_errors ?? 0;
 }
 
-/** Resets the B3 consecutive-error streak to 0 (called after any successful tick). */
+/**
+ * Resets the B3 consecutive-error streak to 0 (called after any successful tick).
+ * F-032: guarded on the streak being non-zero so a clean tick is a no-op. This
+ * runs on every successful tick, and an unconditional write would refresh
+ * `updated_at` forever, making a wedged job indistinguishable from a working one
+ * and defeating the stalled-job sweep.
+ */
 export async function resetConsecutiveErrors(env: Env, jobId: string): Promise<void> {
   const sql = neon(env.DATABASE_URL);
   await sql(
-    `UPDATE copy_jobs SET consecutive_errors = 0, updated_at = now() WHERE job_id = $1`,
+    `UPDATE copy_jobs
+     SET consecutive_errors = 0, updated_at = now()
+     WHERE job_id = $1 AND consecutive_errors <> 0`,
     [jobId],
   );
 }
@@ -292,10 +346,15 @@ export async function recomputeCounters(env: Env, jobId: string): Promise<JobCou
   const unmatched = byState.get("unmatched") ?? 0;
   const fetched = Array.from(byState.values()).reduce((sum, n) => sum + n, 0);
 
+  // F-032: `IS DISTINCT FROM` makes this a no-op when nothing moved. Like
+  // resetConsecutiveErrors this runs on every tick, so an unconditional write
+  // would keep `updated_at` fresh on a job that is making no progress at all.
   await sql(
     `UPDATE copy_jobs
      SET matched = $2, written = $3, unmatched = $4, fetched = $5, updated_at = now()
-     WHERE job_id = $1`,
+     WHERE job_id = $1
+       AND (matched, written, unmatched, fetched)
+           IS DISTINCT FROM ($2::int, $3::int, $4::int, $5::int)`,
     [jobId, matched, written, unmatched, fetched],
   );
 

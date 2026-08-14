@@ -13,7 +13,9 @@ vi.mock("../../../src/db/copy_jobs", () => ({
   cancelJob: vi.fn(),
   recomputeCounters: vi.fn(),
   recomputeCountersForJobs: vi.fn(),
+  NON_TERMINAL_STATUSES: ["queued", "fetching", "matching", "writing"],
 }));
+vi.mock("../../../src/copy/active-flag", () => ({ markCopyJobActive: vi.fn() }));
 vi.mock("../../../src/db/copy_job_tracks", () => ({ listTracksPage: vi.fn() }));
 vi.mock("../../../src/db/provider_tokens", () => ({ hasSpotifyScopes: vi.fn() }));
 vi.mock("../../../src/routes/copy/shared", () => ({
@@ -40,6 +42,9 @@ import { hasSpotifyScopes } from "../../../src/db/provider_tokens";
 import { findOwnPlaylist, resolveSourceName } from "../../../src/routes/copy/shared";
 import { snapshotDestTracks } from "../../../src/copy/dest-reader";
 import { notifyCopyJobTerminal } from "../../../src/copy/notify";
+import { markCopyJobActive } from "../../../src/copy/active-flag";
+
+const mockMarkCopyJobActive = vi.mocked(markCopyJobActive);
 
 const mockCreateJob = vi.mocked(createJob);
 const mockLoadActiveJob = vi.mocked(loadActiveJob);
@@ -395,6 +400,28 @@ describe("GET /api/copy/jobs/:job_id — recomputed counters", () => {
     mockGetJob.mockResolvedValueOnce(null);
     const res = await doFetch("/api/copy/jobs/missing");
     expect(res.status).toBe(404);
+  });
+});
+
+describe("F-032: job detail re-arms the active-job flag", () => {
+  it("re-arms the flag when the job is still non-terminal", async () => {
+    mockGetJob.mockResolvedValueOnce(makeJobRow({ status: "matching" }));
+    mockRecomputeCounters.mockResolvedValueOnce({ fetched: 5, matched: 2, written: 0, unmatched: 0 });
+    await doFetch("/api/copy/jobs/job-1");
+    expect(mockMarkCopyJobActive).toHaveBeenCalled();
+  });
+
+  it("leaves the flag untouched when the job is terminal", async () => {
+    mockGetJob.mockResolvedValueOnce(makeJobRow({ status: "completed" }));
+    mockRecomputeCounters.mockResolvedValueOnce({ fetched: 5, matched: 5, written: 5, unmatched: 0 });
+    await doFetch("/api/copy/jobs/job-1");
+    expect(mockMarkCopyJobActive).not.toHaveBeenCalled();
+  });
+
+  it("touches nothing for an unknown job_id", async () => {
+    mockGetJob.mockResolvedValueOnce(null);
+    await doFetch("/api/copy/jobs/missing");
+    expect(mockMarkCopyJobActive).not.toHaveBeenCalled();
   });
 });
 

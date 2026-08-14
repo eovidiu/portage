@@ -17,13 +17,27 @@ routes = [
   { pattern = "<YOUR_WORKER_DOMAIN>", custom_domain = true }
 ]
 
+# Holds the copy engine's advisory active-job flag. The */5 tick reads this
+# instead of Neon, so an idle heartbeat never wakes the autosuspended compute.
+# Neon's free plan suspends only after 5 minutes of inactivity and that timeout
+# is not configurable, so the old one-query-per-tick fast path held the compute
+# awake 99.7% of wall clock and burned 86 of the 100 monthly CU-hours in 13 days.
+# Create your own with
+#   npx wrangler kv namespace create COPY_STATE
+# and paste the printed id below. The flag is a cache of copy_jobs, never a
+# source of truth: without this binding the Worker still runs correctly, just at
+# the old cost of one Neon query per tick.
+[[kv_namespaces]]
+binding = "COPY_STATE"
+id = "<YOUR_KV_NAMESPACE_ID>"
+
 # Steady-state mode (2x daily UTC) per F-010. Backfill drained 2026-05-04 ~09:30 UTC
 # (truly_unprocessed = 0 via LEFT JOIN on tracks/matches/unmatched). Re-enable
 # */15 backfill if Liked Songs queue grows back into a backlog.
 #
 # F-030 (playlist-copy) D1: a third schedule drives runCopyTick — 288
-# invocations/day (0.3% of the request quota); the handler exits after one
-# Neon query when no copy_jobs row is active. scheduled.ts dispatches on
+# invocations/day (0.3% of the request quota); the handler exits without
+# touching Neon when the COPY_STATE flag is absent. scheduled.ts dispatches on
 # controller.cron: the two existing expressions keep calling runSync
 # unchanged. Workers free tier allows up to 5 cron schedules per account —
 # verify no other Worker on the account already uses the remaining slots

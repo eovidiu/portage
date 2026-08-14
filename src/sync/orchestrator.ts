@@ -6,6 +6,9 @@ import {
   markAbandonedRuns,
 } from "../db/sync_runs";
 import { fetchPendingMatchQueue } from "../db/tracks";
+import { loadActiveJob, markStalledJobs } from "../db/copy_jobs";
+import { markCopyJobActive, clearCopyJobActive } from "../copy/active-flag";
+import { notifyCopyJobTerminal } from "../copy/notify";
 import { fetchLikedSongs } from "../providers/spotify/liked";
 import { SpotifyAuthError } from "../providers/spotify/oauth";
 import { IntegrityError } from "../crypto";
@@ -397,6 +400,27 @@ async function runSyncCore(env: Env): Promise<OrchestratorResult> {
   }
 }
 
+/**
+ * F-032: the copy engine's housekeeping, hosted here because this path already
+ * pays to wake Neon twice a day. It cannot live on the five-minute copy tick —
+ * that tick's whole purpose is now to touch Neon only when there is work.
+ *
+ * Sweeping runs before reconciling so a job that just went terminal is reflected
+ * in the flag we write. The reconcile is the backstop for a lost flag WRITE: the
+ * tick can self-heal a stuck-set flag on its own, but a stuck-clear flag makes a
+ * live job invisible to every tick, and only a query can discover that.
+ */
+async function sweepAndReconcileCopyJobs(env: Env): Promise<void> {
+  const stalled = await markStalledJobs(env);
+  for (const job of stalled) {
+    await notifyCopyJobTerminal(env, job);
+  }
+
+  const active = await loadActiveJob(env);
+  if (active) await markCopyJobActive(env);
+  else await clearCopyJobActive(env);
+}
+
 // F-029: single notification choke point. Both src/scheduled.ts and
 // POST /sync/run call runSync, so hooking here covers scheduled runs, manual
 // runs, and manual runs that outlive the route's 25 s response race. The
@@ -410,6 +434,7 @@ export async function runSync(env: Env): Promise<OrchestratorResult> {
     if (abandonedCount > 0) {
       await notifyAbandonedSweep(env, abandonedCount);
     }
+    await sweepAndReconcileCopyJobs(env);
     result = await runSyncCore(env);
   } catch (err) {
     await notifyOrchestratorCrash(env, err);
