@@ -4,6 +4,54 @@
 **Observed in:** omp goal mode, session on `portage` (Tidal search-endpoint outage)
 **Severity:** wastes unbounded tokens; trains agents toward dishonest completion
 
+
+---
+
+## Which component owns this
+
+**omp core, not the `vv-omp-harness` plugin.** Verified rather than assumed:
+
+- `vv-omp-harness` contains **zero** references to goal mode, objectives, or goal ops.
+- The plugin registers exactly one tool, `harness_test`, plus lifecycle hooks
+  (`session_start`, `session_stop`, `tool_call`, `tool_result`, `session_shutdown`).
+- `goal` (`create`/`get`/`complete`/`resume`/`drop`), the `<goal_context>` injection and
+  the hidden "Continue active goal" steer are all omp core.
+
+So every fix below belongs in omp's goal implementation. The plugin needs no change for
+the loop itself.
+
+### The harness gate was not the runaway — but it has two defects of its own
+
+`session_stop` blocks **exactly once per settle attempt**, guarded by
+`event.stop_hook_active`, and `discipline.ts:16` states the intent plainly: *"A gate that
+can re-block forever converts a discipline reminder into a session the human cannot end."*
+The implementation matches the comment. That is correct behaviour.
+
+Two things are still worth fixing, both small:
+
+**1. The escape clause is not machine-checked.** `renderFindings` prints
+
+> *"If a gap is deliberate, say so explicitly in `.harness/progress.txt` and continue."*
+
+but nothing reads `progress.txt` for such a declaration. The only checks on that file are
+existence (`discipline.ts:70`) and mtime freshness (`:71-75`). The `ledger-invalid` finding
+is pushed purely from `ledger.ok` at `:55`. So writing the declaration **cannot** silence
+the gate — it is advice to the next session's reader, not a condition. In this session I
+wrote it four times believing it might clear the finding. It never could.
+
+Fix: either honour it — scan the handoff for a machine-readable marker such as
+`HARNESS-ACCEPT: ledger-invalid` and downgrade that finding to a warning — or reword the
+line so it does not imply an action that silences anything.
+
+**2. "Block exactly once" is once *per settle attempt*, and assumes a bounded caller.**
+With an outer loop driving unbounded settle attempts, the gate fires unbounded times too:
+each goal continuation reached `session_stop`, took its one legitimate block, and handed
+back another turn. Neither component is individually runaway; together they compound.
+
+This is the more interesting finding. The gate's safety property is stated as absolute
+("blocks exactly once") but is actually relative to how many times something tries to
+settle. Worth either restating in those terms, or tracking blocks per *session* rather than
+per stop event so an unfixable finding costs one turn total.
 ---
 
 ## What happened
