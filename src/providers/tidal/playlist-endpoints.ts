@@ -3,10 +3,12 @@
 // OAS source:
 //   https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json
 //
-// Per the schema PlaylistsItemsRelationshipAddOperation_Payload, the `data`
-// array is constrained to `maxItems: 20` — so BATCH_SIZE MUST be <= 20.
-// The earlier value of 100 was fabricated and would have failed validation
-// on every batch larger than 20.
+// Per the schema PlaylistsItemsRelationshipAddOperation_Payload the `data`
+// array is capped by `maxItems`. That cap was 20 when this was written and is
+// 50 as of OAS 1.10.115 (re-verified 2026-09-01); BATCH_SIZE must stay <= it.
+// We deliberately do NOT track the cap upward: each batch is one subrequest and
+// a Workers free-tier invocation gets 50 in total, shared with the match stage.
+// The original value of 100 was fabricated and failed validation outright.
 export const BATCH_SIZE = 20;
 
 // Per Playlists_Attributes the access enum is [PUBLIC, UNLISTED] only —
