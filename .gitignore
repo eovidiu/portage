@@ -38,3 +38,5 @@ unmatched-review.md
 
 # User-specific wrangler config (template at wrangler.toml.example)
 wrangler.toml
+
+.claude/settings.local.json

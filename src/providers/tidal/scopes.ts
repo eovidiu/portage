@@ -6,8 +6,11 @@
 // Code-touched Tidal endpoints and their scope requirements:
 //   GET  /v2/tracks?filter[isrc]      — no specific scope (any valid token)
 //   GET  /v2/tracks/{id}              — no specific scope
-//   GET  /v2/searchResults/{id}       — no specific scope (search.read is for
-//                                       PERSONALIZED results; we hit catalog)
+//   GET  /v2/searchResults            — no specific scope (search.read is for
+//                                       PERSONALIZED results; we hit catalog).
+//                                       Collection + filter[query]; the
+//                                       /searchResults/{id} singleton was
+//                                       removed upstream ~2026-08-11.
 //   POST /v2/playlists                — playlists.write
 //   GET  /v2/playlists/{id}           — playlists.read
 //   GET  .../relationships/items      — playlists.read

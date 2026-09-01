@@ -53,6 +53,37 @@ export async function upsertUnmatched(
   );
 }
 
+/**
+ * Record that a match attempt happened, without recording a verdict.
+ *
+ * An upstream failure (Tidal 4xx/5xx, or an unparseable body) says nothing about
+ * the track — only that we could not look. It must still advance
+ * `last_attempt_at`, because both match queues re-select any track whose
+ * `unmatched` row is absent or older than 7 days, ordered `first_seen_at ASC`
+ * and capped at a small batch. A failure that writes nothing therefore pins the
+ * head of the queue and starves every track behind it: that is what stalled
+ * matching from 2026-08-11 to 2026-08-31, when Tidal removed the search
+ * endpoint and all 400s took a `continue` before any write.
+ *
+ * Deliberately NOT `upsertUnmatched`: that overwrites `reason` and, worse,
+ * `candidates` — which would erase the F-027a top-3 picker list on every
+ * transient error. This preserves both and touches only the attempt counters.
+ */
+export async function recordAttempt(
+  sql: NeonQueryFunction<false, false>,
+  spotifyId: string,
+): Promise<void> {
+  await sql(
+    `INSERT INTO unmatched (spotify_id, reason, attempts, last_attempt_at, status)
+     VALUES ($1, $2, 1, now(), 'pending')
+     ON CONFLICT (spotify_id) DO UPDATE
+       SET attempts        = unmatched.attempts + 1,
+           last_attempt_at = now()
+     WHERE unmatched.status = 'pending'`,
+    [spotifyId, "upstream_error"],
+  );
+}
+
 export async function getUnmatchedCount(
   sql: NeonQueryFunction<false, false>,
 ): Promise<number> {
