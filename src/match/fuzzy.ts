@@ -1,6 +1,6 @@
 import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 import { insertMatch } from "../db/matches";
-import { upsertUnmatched } from "../db/unmatched";
+import { upsertUnmatched, recordAttempt } from "../db/unmatched";
 import { normaliseTitle } from "./title";
 import { scoreCandidate, type ResolvedTidalCandidate } from "./score";
 import { searchTidalCandidates } from "./tidal-search";
@@ -117,6 +117,18 @@ export async function matchByFuzzy(
   let unmatched = 0;
   const errors: FuzzyMatchResult["errors"] = [];
 
+  // An upstream failure is not a verdict about the track — it means we could
+  // not look. It must still advance last_attempt_at, or the track pins the head
+  // of the `first_seen_at ASC LIMIT n` queue and starves everything behind it.
+  const recordFailure = async (
+    spotifyId: string,
+    errorCode: string,
+    message: string,
+  ): Promise<void> => {
+    errors.push({ spotify_id: spotifyId, error_code: errorCode, message });
+    await recordAttempt(sql, spotifyId);
+  };
+
   for (const track of tracks) {
     const query = `${normaliseTitle(track.artist)} ${normaliseTitle(track.title)}`;
 
@@ -124,42 +136,38 @@ export async function matchByFuzzy(
     try {
       result = await searchTidalCandidates(env, query);
     } catch (err) {
-      errors.push({
-        spotify_id: track.spotify_id,
-        error_code: "tidal_error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-      unmatched++;
+      await recordFailure(
+        track.spotify_id,
+        "tidal_error",
+        err instanceof Error ? err.message : String(err),
+      );
       continue;
     }
 
     if (result.status === 429 && result.retried) {
-      errors.push({
-        spotify_id: track.spotify_id,
-        error_code: "tidal_429",
-        message: "Second 429 received; track deferred to next run",
-      });
-      unmatched++;
+      await recordFailure(
+        track.spotify_id,
+        "tidal_429",
+        "Second 429 received; track deferred to next run",
+      );
       continue;
     }
 
     if (result.status >= 400) {
-      errors.push({
-        spotify_id: track.spotify_id,
-        error_code: `tidal_${result.status}`,
-        message: `Tidal returned HTTP ${result.status}`,
-      });
-      unmatched++;
+      await recordFailure(
+        track.spotify_id,
+        `tidal_${result.status}`,
+        `Tidal returned HTTP ${result.status}`,
+      );
       continue;
     }
 
     if (result.bodyParseError) {
-      errors.push({
-        spotify_id: track.spotify_id,
-        error_code: "tidal_parse_error",
-        message: "Failed to parse Tidal search response JSON",
-      });
-      unmatched++;
+      await recordFailure(
+        track.spotify_id,
+        "tidal_parse_error",
+        "Failed to parse Tidal search response JSON",
+      );
       continue;
     }
 

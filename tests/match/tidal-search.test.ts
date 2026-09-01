@@ -27,18 +27,23 @@ function jsonApiResponse(body: unknown, init: ResponseInit = {}): Response {
 
 function happyBody() {
   return {
-    data: {
-      id: "Metallica%20One",
-      type: "searchResults",
-      relationships: {
-        tracks: {
-          data: [
-            { id: "track-1", type: "tracks" },
-            { id: "track-2", type: "tracks" },
-          ],
+    // The live API returns `data` as an ARRAY holding one searchResults
+    // resource. Verified 2026-08-31 against
+    // GET openapi.tidal.com/v2/searchResults?filter[query]=…
+    data: [
+      {
+        id: "7WWZpWooHF2uk21EqhRp2G6linyDUHByQuDklLmc909BTb",
+        type: "searchResults",
+        relationships: {
+          tracks: {
+            data: [
+              { id: "track-1", type: "tracks" },
+              { id: "track-2", type: "tracks" },
+            ],
+          },
         },
       },
-    },
+    ],
     included: [
       {
         id: "track-1",
@@ -66,21 +71,33 @@ function happyBody() {
 }
 
 describe("searchTidalCandidates — URL composition", () => {
-  it("hits /v2/searchResults/{encodedQuery} with the required compound include", async () => {
+  // Tidal removed GET /v2/searchResults/{query} on ~2026-08-11; the path form
+  // now returns 400 INVALID_RESOURCE_ID for every query, including plain ASCII.
+  // The query belongs in filter[query] on the collection.
+  it("puts the query in filter[query] on the collection, with the compound include", async () => {
     mockTidalFetch.mockResolvedValueOnce(jsonApiResponse(happyBody()));
     await searchTidalCandidates(env, "Metallica One");
     expect(mockTidalFetch).toHaveBeenCalledOnce();
     const url = mockTidalFetch.mock.calls[0][1];
     expect(url).toBe(
-      "https://openapi.tidal.com/v2/searchResults/Metallica%20One?include=tracks,tracks.artists,tracks.albums",
+      "https://openapi.tidal.com/v2/searchResults" +
+        "?filter%5Bquery%5D=Metallica+One" +
+        "&include=tracks%2Ctracks.artists%2Ctracks.albums",
     );
   });
 
-  it("URL-encodes special chars in the query", async () => {
+  it("never puts the query in the path segment", async () => {
+    mockTidalFetch.mockResolvedValueOnce(jsonApiResponse(happyBody()));
+    await searchTidalCandidates(env, "Metallica One");
+    const url = new URL(mockTidalFetch.mock.calls[0][1] as string);
+    expect(url.pathname).toBe("/v2/searchResults");
+  });
+
+  it("encodes special chars in the query parameter", async () => {
     mockTidalFetch.mockResolvedValueOnce(jsonApiResponse(happyBody()));
     await searchTidalCandidates(env, "AC/DC Back in Black");
     const url = mockTidalFetch.mock.calls[0][1];
-    expect(url).toContain("AC%2FDC%20Back%20in%20Black");
+    expect(url).toContain("filter%5Bquery%5D=AC%2FDC+Back+in+Black");
   });
 });
 
@@ -218,7 +235,7 @@ describe("searchTidalCandidates — JSON:API resolution", () => {
 
   it("returns no candidates when relationships.tracks.data is empty", async () => {
     const body = happyBody();
-    body.data.relationships.tracks.data = [];
+    body.data[0].relationships.tracks.data = [];
     mockTidalFetch.mockResolvedValueOnce(jsonApiResponse(body));
     const result = await searchTidalCandidates(env, "x");
     expect(result.candidates).toEqual([]);
@@ -234,11 +251,22 @@ describe("searchTidalCandidates — JSON:API resolution", () => {
 
   it("skips non-track refs in the relationship data", async () => {
     const body = happyBody();
-    body.data.relationships.tracks.data.unshift({ id: "other-1", type: "videos" });
+    body.data[0].relationships.tracks.data.unshift({ id: "other-1", type: "videos" });
     mockTidalFetch.mockResolvedValueOnce(jsonApiResponse(body));
     const result = await searchTidalCandidates(env, "x");
     expect(result.candidates).toHaveLength(2);
     expect(result.candidates.every((c) => c.id !== "other-1")).toBe(true);
+  });
+
+  // Defensive: the pre-2026-08-11 endpoint returned `data` as a bare object.
+  // Accepting both shapes means a future Tidal change back cannot silently
+  // zero out every search the way the array change would have.
+  it("also resolves a bare-object data (older response shape)", async () => {
+    const body = happyBody() as unknown as { data: unknown[] | unknown };
+    body.data = (body.data as unknown[])[0];
+    mockTidalFetch.mockResolvedValueOnce(jsonApiResponse(body));
+    const result = await searchTidalCandidates(env, "x");
+    expect(result.candidates).toHaveLength(2);
   });
 });
 

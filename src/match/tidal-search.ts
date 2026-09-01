@@ -27,7 +27,12 @@ import {
 } from "./json-api";
 import type { ResolvedTidalCandidate } from "./score";
 
-// Verified: https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json — server https://openapi.tidal.com/v2, path /searchResults/{id} (marker lost when F-024 extracted this constant from fuzzy.ts; re-verified 2026-07-12)
+// Verified: https://tidal-music.github.io/tidal-api-reference/tidal-api-oas.json
+// — server https://openapi.tidal.com/v2, collection path /searchResults with a
+// required `filter[query]` parameter (OAS 1.10.115, re-verified 2026-08-31).
+// The singleton form GET /searchResults/{id} was REMOVED upstream on or about
+// 2026-08-11 and now answers 400 INVALID_RESOURCE_ID for every free-text id,
+// including plain ASCII. It is not in the OAS at all any more.
 const TIDAL_SEARCH_BASE = "https://openapi.tidal.com/v2/searchResults";
 
 export interface SearchResult {
@@ -48,8 +53,13 @@ async function sleep(ms: number): Promise<void> {
 }
 
 function buildSearchUrl(query: string): string {
-  const encoded = encodeURIComponent(query);
-  return `${TIDAL_SEARCH_BASE}/${encoded}?include=tracks,tracks.artists,tracks.albums`;
+  const url = new URL(TIDAL_SEARCH_BASE);
+  // The query is a filter on the collection, never a path segment.
+  url.searchParams.set("filter[query]", query);
+  // JSON:API §6.2 compound include: resolves tracks' artist + album metadata
+  // into `included[]` so extractCandidates can score without extra requests.
+  url.searchParams.set("include", "tracks,tracks.artists,tracks.albums");
+  return url.toString();
 }
 
 function resolveTrack(
@@ -87,13 +97,19 @@ function extractCandidates(body: unknown): ResolvedTidalCandidate[] {
   if (!body || typeof body !== "object") return [];
   const b = body as Record<string, unknown>;
 
-  const data = b.data as
-    | {
-        relationships?: {
-          tracks?: { data?: Array<{ id: string; type: string }> };
-        };
-      }
-    | undefined;
+  type SearchResultsResource = {
+    relationships?: {
+      tracks?: { data?: Array<{ id: string; type: string }> };
+    };
+  };
+
+  // The collection endpoint returns `data` as an array holding one
+  // searchResults resource; the removed singleton returned a bare object.
+  // Accept both, so a shape change upstream can never silently degrade every
+  // search to "no candidates" — which would be written to the DB as a real
+  // no_candidates verdict rather than surfacing as an error.
+  const raw = b.data;
+  const data = (Array.isArray(raw) ? raw[0] : raw) as SearchResultsResource | undefined;
   const trackRefs = data?.relationships?.tracks?.data;
   if (!Array.isArray(trackRefs)) return [];
 

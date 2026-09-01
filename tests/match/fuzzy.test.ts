@@ -32,11 +32,13 @@ function makeEnv(): Env {
 }
 
 /**
- * Tidal v2 returns JSON:API. `/searchResults/{id}?include=tracks,artists,albums`
- * gives back: `data` (single SearchResults resource with relationships pointing
- * to top tracks/artists/albums) and `included[]` (full track + artist + album
- * resources). These helpers mirror that contract precisely so tests exercise
- * the real resolution path.
+ * Tidal v2 returns JSON:API. `/searchResults?filter[query]=…&include=tracks,
+ * tracks.artists,tracks.albums` gives back `data` — an ARRAY holding one
+ * SearchResults resource whose relationships point to top tracks — plus
+ * `included[]` with the full track + artist + album resources. These helpers
+ * mirror that contract precisely so tests exercise the real resolution path.
+ * (The pre-2026-08-11 singleton endpoint returned a bare object; the parser
+ * still tolerates that, but fixtures track the live shape.)
  */
 
 interface TrackResource {
@@ -111,7 +113,7 @@ function makeTidalTrack(opts: MakeTrackOptions = {}): ResolvedTrackBundle {
   return { track, artist, album };
 }
 
-/** Build a `/searchResults/{id}` style response with N track refs + included resources. */
+/** Build a `/searchResults?filter[query]=` response with N track refs + included resources. */
 function tidalSearchOk(bundles: ResolvedTrackBundle[]): Response {
   const data = {
     id: "yesterday",
@@ -122,7 +124,7 @@ function tidalSearchOk(bundles: ResolvedTrackBundle[]): Response {
     },
   };
   const included = bundles.flatMap((b) => [b.track, b.artist, b.album]);
-  return new Response(JSON.stringify({ data, included }), { status: 200 });
+  return new Response(JSON.stringify({ data: [data], included }), { status: 200 });
 }
 
 function tidalSearchEmpty(): Response {
@@ -132,7 +134,7 @@ function tidalSearchEmpty(): Response {
     attributes: {},
     relationships: { tracks: { data: [] } },
   };
-  return new Response(JSON.stringify({ data, included: [] }), { status: 200 });
+  return new Response(JSON.stringify({ data: [data], included: [] }), { status: 200 });
 }
 
 function tidalStatus(status: number, headers: Record<string, string> = {}): Response {
@@ -379,21 +381,23 @@ describe("T-007-13: per-decision log line emitted for each track", () => {
 });
 
 describe("matchByFuzzy — request URL shape", () => {
-  it("uses /searchResults camelCase, compound include paths for nested artists/albums, no limit param", async () => {
+  it("uses the /searchResults collection with filter[query], compound include paths, no limit param", async () => {
     mockTidalFetch.mockResolvedValueOnce(tidalSearchOk([makeTidalTrack()]));
 
     await matchByFuzzy(makeEnv());
 
     const [, path] = mockTidalFetch.mock.calls[0] as [Env, string];
-    expect(path).toContain("/v2/searchResults/");
-    expect(path).not.toContain("/v2/searchresults/"); // lowercase form is wrong
+    const url = new URL(path);
+    // Tidal removed GET /searchResults/{query} on ~2026-08-11: a free-text path
+    // segment now answers 400 INVALID_RESOURCE_ID. The query is a filter.
+    expect(url.pathname).toBe("/v2/searchResults");
+    expect(url.searchParams.get("filter[query]")).toBe("The Beatles Yesterday");
+    expect(path).not.toContain("/v2/searchresults"); // lowercase form is wrong
     // 2026-05-02 prod fix: tracks.artists + tracks.albums (compound include
     // paths) — bare `artists,albums` returned tracks but no track→artist refs.
-    expect(path).toContain("include=tracks");
-    expect(path).toContain("tracks.artists");
-    expect(path).toContain("tracks.albums");
+    expect(url.searchParams.get("include")).toBe("tracks,tracks.artists,tracks.albums");
     expect(path).not.toContain("limit=");
-    expect(path).not.toContain("/relationships/tracks"); // we now use the singular endpoint
+    expect(path).not.toContain("/relationships/tracks");
   });
 });
 
@@ -543,6 +547,63 @@ describe("matchByFuzzy — invalid JSON response", () => {
     const result = await matchByFuzzy(makeEnv());
 
     expect(result.errors[0].error_code).toBe("tidal_parse_error");
+  });
+});
+
+// Regression: 2026-08-11..08-31 the matcher produced ZERO matches for 20 days.
+// Tidal removed the search endpoint, every search 400'd, and each error branch
+// took a `continue` before any write. `last_attempt_at` therefore never
+// advanced, so the two oldest tracks stayed at the head of a
+// `first_seen_at ASC LIMIT 2` queue forever and starved the other 42.
+// An upstream failure must record the attempt, and must not be reported as an
+// unmatched verdict when no unmatched row was written.
+describe("matchByFuzzy — an upstream failure records an attempt, not a verdict", () => {
+  const cases: Array<[string, () => void]> = [
+    ["4xx", () => mockTidalFetch.mockResolvedValueOnce(tidalStatus(400))],
+    ["5xx", () => mockTidalFetch.mockResolvedValueOnce(tidalStatus(503))],
+    ["throw", () => mockTidalFetch.mockRejectedValueOnce(new Error("network failure"))],
+    [
+      "unparseable body",
+      () => mockTidalFetch.mockResolvedValueOnce(new Response("not-json", { status: 200 })),
+    ],
+  ];
+
+  for (const [label, arrange] of cases) {
+    it(`advances the retry cooldown on ${label} so the queue head rotates`, async () => {
+      arrange();
+      await matchByFuzzy(makeEnv());
+
+      const attemptCall = mockSql.mock.calls.find(
+        ([q]: [string]) =>
+          typeof q === "string" &&
+          q.includes("INSERT INTO unmatched") &&
+          q.includes("last_attempt_at = now()"),
+      );
+      expect(attemptCall, `no attempt recorded for ${label}`).toBeDefined();
+    });
+
+    it(`does not count ${label} as an unmatched verdict`, async () => {
+      arrange();
+      const result = await matchByFuzzy(makeEnv());
+
+      expect(result.errors).toHaveLength(1);
+      // The old code did `unmatched++` here without writing a row, which is
+      // what produced the phantom "unmatched 2" in the ntfy alert.
+      expect(result.unmatched).toBe(0);
+    });
+  }
+
+  it("preserves the F-027a candidate list when recording an upstream failure", async () => {
+    mockTidalFetch.mockResolvedValueOnce(tidalStatus(400));
+    await matchByFuzzy(makeEnv());
+
+    const attemptCall = mockSql.mock.calls.find(
+      ([q]: [string]) =>
+        typeof q === "string" &&
+        q.includes("INSERT INTO unmatched") &&
+        q.includes("last_attempt_at = now()"),
+    ) as [string, unknown[]];
+    expect(attemptCall[0]).not.toContain("candidates");
   });
 });
 

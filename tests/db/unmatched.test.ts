@@ -5,7 +5,7 @@ vi.mock("@neondatabase/serverless", () => ({
   neon: () => mockSql,
 }));
 
-import { upsertUnmatched, getUnmatchedCount, markSkipped, markMatched } from "../../src/db/unmatched";
+import { upsertUnmatched, recordAttempt, getUnmatchedCount, markSkipped, markMatched } from "../../src/db/unmatched";
 
 const mockEnv = { DATABASE_URL: "postgresql://test" } as never;
 
@@ -38,6 +38,59 @@ describe("upsertUnmatched", () => {
     await upsertUnmatched(mockSql as never, { spotify_id: "sp3", reason: "no_candidates" });
     const [query] = mockSql.mock.calls[0] as [string];
     expect(query).toContain("WHERE unmatched.status = 'pending'");
+  });
+});
+
+// An upstream failure (Tidal 4xx/5xx/parse error) is NOT a verdict about the
+// track — it is "we could not look". It must still record the attempt, because
+// the match queue re-selects any track whose unmatched row is absent or older
+// than 7 days. Without a write, a failing track pins the head of a
+// `ORDER BY first_seen_at ASC LIMIT n` queue forever and starves every track
+// behind it. That is exactly what stalled the matcher 2026-08-11..08-31.
+describe("recordAttempt — advances the retry cooldown without recording a verdict", () => {
+  it("advances last_attempt_at so the track leaves the head of the queue", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    await recordAttempt(mockSql as never, "sp1");
+    expect(mockSql).toHaveBeenCalledOnce();
+    const [query] = mockSql.mock.calls[0] as [string];
+    expect(query).toContain("last_attempt_at = now()");
+    expect(query).toContain("attempts");
+  });
+
+  it("does NOT overwrite reason on conflict (keeps the previous verdict)", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    await recordAttempt(mockSql as never, "sp1");
+    const [query] = mockSql.mock.calls[0] as [string];
+    expect(query).not.toContain("reason          = EXCLUDED.reason");
+    expect(query).not.toContain("reason = EXCLUDED.reason");
+  });
+
+  // F-027a persists the top-3 Tidal candidates on a fuzzy_below_threshold row so
+  // the operator can pick one later. upsertUnmatched sets candidates =
+  // EXCLUDED.candidates, which is NULL here — reusing it would erase that list
+  // on every transient upstream error.
+  it("does NOT overwrite candidates on conflict (keeps the F-027a picker list)", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    await recordAttempt(mockSql as never, "sp1");
+    const [query] = mockSql.mock.calls[0] as [string];
+    expect(query).not.toContain("candidates");
+  });
+
+  it("leaves matched/skipped rows untouched", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    await recordAttempt(mockSql as never, "sp1");
+    const [query] = mockSql.mock.calls[0] as [string];
+    expect(query).toContain("WHERE unmatched.status = 'pending'");
+  });
+
+  it("seeds a pending row with an upstream_error reason when none exists", async () => {
+    mockSql.mockResolvedValueOnce([]);
+    await recordAttempt(mockSql as never, "sp9");
+    const [query, params] = mockSql.mock.calls[0] as [string, unknown[]];
+    expect(query).toContain("INSERT INTO unmatched");
+    expect(query).toContain("ON CONFLICT");
+    expect(params[0]).toBe("sp9");
+    expect(params).toContain("upstream_error");
   });
 });
 
