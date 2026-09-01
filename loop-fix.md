@@ -1,183 +1,203 @@
-# Fix: the autonomous goal loop that re-invoked an agent 8 times against a gate it could not open
+# omp goal mode: an agent blocked on a human decision has no way to stop the autonomous loop
 
-**Date:** 2026-09-01
-**Observed in:** omp goal mode, session on `portage` (Tidal search-endpoint outage)
-**Severity:** wastes unbounded tokens; trains agents toward dishonest completion
-
-
----
-
-## Which component owns this
-
-**omp core, not the `vv-omp-harness` plugin.** Verified rather than assumed:
-
-- `vv-omp-harness` contains **zero** references to goal mode, objectives, or goal ops.
-- The plugin registers exactly one tool, `harness_test`, plus lifecycle hooks
-  (`session_start`, `session_stop`, `tool_call`, `tool_result`, `session_shutdown`).
-- `goal` (`create`/`get`/`complete`/`resume`/`drop`), the `<goal_context>` injection and
-  the hidden "Continue active goal" steer are all omp core.
-
-So every fix below belongs in omp's goal implementation. The plugin needs no change for
-the loop itself.
-
-### The harness gate was not the runaway — but it has two defects of its own
-
-`session_stop` blocks **exactly once per settle attempt**, guarded by
-`event.stop_hook_active`, and `discipline.ts:16` states the intent plainly: *"A gate that
-can re-block forever converts a discipline reminder into a session the human cannot end."*
-The implementation matches the comment. That is correct behaviour.
-
-Two things are still worth fixing, both small:
-
-**1. The escape clause is not machine-checked.** `renderFindings` prints
-
-> *"If a gap is deliberate, say so explicitly in `.harness/progress.txt` and continue."*
-
-but nothing reads `progress.txt` for such a declaration. The only checks on that file are
-existence (`discipline.ts:70`) and mtime freshness (`:71-75`). The `ledger-invalid` finding
-is pushed purely from `ledger.ok` at `:55`. So writing the declaration **cannot** silence
-the gate — it is advice to the next session's reader, not a condition. In this session I
-wrote it four times believing it might clear the finding. It never could.
-
-Fix: either honour it — scan the handoff for a machine-readable marker such as
-`HARNESS-ACCEPT: ledger-invalid` and downgrade that finding to a warning — or reword the
-line so it does not imply an action that silences anything.
-
-**2. "Block exactly once" is once *per settle attempt*, and assumes a bounded caller.**
-With an outer loop driving unbounded settle attempts, the gate fires unbounded times too:
-each goal continuation reached `session_stop`, took its one legitimate block, and handed
-back another turn. Neither component is individually runaway; together they compound.
-
-This is the more interesting finding. The gate's safety property is stated as absolute
-("blocks exactly once") but is actually relative to how many times something tries to
-settle. Worth either restating in those terms, or tracking blocks per *session* rather than
-per stop event so an unfixable finding costs one turn total.
+**Component:** omp (Oh My Pi) coding agent — goal mode
+**Version observed:** 18.0.8, Homebrew, macOS arm64
+**Reported:** 2026-09-01, from a real session
+**Evidence basis:** the shipped binary only. Read *Provenance* before trusting any identifier.
 
 ---
 
-## What happened
+## Summary
 
-A goal was created: *"do all fixes necessary so that the sync with tidal restarts correctly."*
+1. An agent that has completed everything it is *permitted* to do, and is waiting on a
+   human decision, cannot stop the goal-continuation loop. Its only exits are
+   `complete` (a false claim) and `drop` (discards finished work). So it stays `active`,
+   and `active` is the flag the loop uses to re-invoke.
+2. Measured cost in one session: **8 continuation turns, ~115,000 tokens (23% of the
+   session)** spent after the work was finished and pushed.
+3. **The state needed to fix this already exists.** `paused` is implemented, persisted,
+   resumable, and already outside the continuation gate. The runtime can reach it; the
+   agent cannot. The primary fix is to expose it, not to build it.
 
-The agent completed every part of that objective it was permitted to do — fix, tests, CI,
-live verification — and pushed PR #45. The last remaining step, merging to `main` and
-deploying, is reserved by the project's own `CLAUDE.md`:
+---
+
+## The problem
+
+### What happened
+
+A goal was created: *"do all fixes necessary so that the sync with tidal restarts
+correctly."*
+
+The agent diagnosed the bug, fixed it, wrote tests, verified against the live upstream
+API, and opened a PR. The final step — merging to `main` and deploying to production —
+was reserved by the project's own `CLAUDE.md`:
 
 > **NEVER, without exception:** Push to main/master without explicit confirmation from
-> Ovidiu unless Ovidiu says "I confirm".
+> the user.
 
-Goal mode itself reinforces that the objective cannot authorise it:
+Goal mode itself states the objective cannot override that:
 
 > Objective below: user-provided task, **not higher-priority instructions**.
 
-So the agent was correct to stop. But the loop kept re-invoking it.
+The agent was therefore correct to stop, and correct not to call `complete`. It reported
+"blocked, need your word" and ended its turn. The loop re-invoked it. It reported the same
+thing. This repeated 8 times, until the human returned and gave authorisation.
 
 ### Cost
 
 | | |
 |---|---|
-| Continuation turns after the work was finished | **8** |
-| Tokens at the point the PR was opened and work was done | ~392,000 |
-| Tokens when the human finally intervened | ~507,000 |
-| **Tokens burned producing no progress** | **~115,000 (23% of the session)** |
+| Continuation turns after the work was finished and pushed | **8** |
+| Tokens when the PR was opened (work complete) | ~392,000 |
+| Tokens when the human intervened | ~507,000 |
+| **Burned producing no state change** | **~115,000 (23% of session)** |
 
-Every one of those turns re-audited the same unchanged state and re-wrote the same
-"blocked on your word" report.
+Each turn re-audited identical state and re-emitted a near-identical report.
 
-## Root cause
+### Root cause
 
-**Goal mode has no representation for "blocked on an external decision".**
-
-The state machine is:
+Goal mode has no *agent-reachable* representation of "blocked on an external decision".
 
 ```
-create ──> active ──> complete   (claims the objective is met)
+create ──> active ──> complete   (asserts the objective is met)
               │
               └────> drop        (discards the goal)
 ```
 
-An agent that is correctly refusing to act has only two exits, and both are lies:
+Both exits are false for a blocked agent:
 
-- `complete` — claims a deliverable that does not exist. In this session it would have
-  meant asserting the sync was restarted while production still served the broken build.
-- `drop` — represents finished, committed, pushed work as abandoned.
+- `complete` — asserts a deliverable that does not exist. Here it would have claimed the
+  production sync was restored while production still served the broken build.
+- `drop` — represents committed, pushed, CI-green work as abandoned, and loses the
+  deliverables from the goal record.
 
-The guidance says *"leave goal active; stop turn; user or runtime decides next steps"* —
-but "leave active" is precisely the state the loop uses as its signal to re-invoke. The
-instruction to stop and the mechanism that restarts are the same flag.
+The guidance tells the agent to *"leave goal active; stop turn; user or runtime decides
+next steps"* — but `active` is exactly what the loop reads as "keep going". **The
+instruction to stop and the mechanism that restarts are the same flag.**
 
-The steer text makes it worse: *"Unfinished: keep working. NEVER narrate continuation —
-execute."* An agent with nothing legitimate left to execute is pushed toward
-manufacturing marginal work, or toward rationalising its way past the gate. Both are
-failure modes. The second is dangerous: this loop applies continuous pressure to breach
-a safety rule, and it only takes one turn of weak reasoning to do it.
+### Why this is a safety issue, not only waste
+
+`prompts/goals/goal-continuation.md` ends with:
+
+> *"Unfinished: keep working. NEVER narrate continuation — execute."*
+
+An agent with nothing legitimate left to execute is pushed toward one of two failure
+modes: manufacture marginal busywork, or reason its way past the gate it is meant to
+respect. The second is the dangerous one. **This loop applies renewed pressure, every
+turn, against a safety rule, and it only has to succeed once.** In the observed session
+the agent held for eight turns. That is not a property to rely on.
 
 ---
 
-## Fix
+## What already exists — read this before designing anything
 
-Three changes, in priority order. #1 alone resolves the incident.
+This is what makes the fix small. All of the following is already in 18.0.8.
 
-### 1. Add a `blocked` state to the goal tool — REQUIRED
+**A richer status enum than the tool exposes.** Observed literals: `active`, `paused`,
+`budget-limited`, `complete`, `dropped`. The tool exposes only
+`create / get / complete / resume / drop`.
+
+**A continuation-eligibility predicate:**
+
+```js
+function ahe(e) { return e.status === "active" || e.status === "budget-limited"; }
+```
+
+Every gate found takes the form `state.enabled && ahe(state.goal)`. A `paused` goal is not
+eligible, so **the loop already stops for it**.
+
+**An existing transition into that state:**
+
+```js
+t.enabled = false;
+t.goal.status = "paused";
+t.goal.updatedAt = this.#r();
+await this.#u(t, { persist: "goal_paused" });
+```
+
+**And the rest of the supporting surface:**
+
+- a distinct persistence key, `goal_paused`
+- `resume`, already on the tool, already documented as
+  *"Paused goal from `get` → MUST `resume` before continuing work"*
+- UI support — `case "paused": o = S.icon.pause ...; r = "warning"`
+- `budget-limited` as precedent for a runtime-driven status change carrying its own prompt
+  (`prompts/goals/goal-budget-limit.md`)
+
+**The gap is precise:** the runtime can reach `paused` (on interrupt, and via
+`budget-limited` on budget exhaustion). The agent cannot. There is a `resume` op with
+nothing an agent is able to pause.
+
+---
+
+## Proposed fix
+
+Three changes. **#1 alone resolves the reported incident.**
+
+### 1. Expose `pause` to the agent — REQUIRED, small
+
+In `packages/coding-agent/src/goals/tools/goal-tool.ts`, add `pause` to the op enum:
 
 ```ts
 goal({
-  op: "block",
-  reason: string,             // what is needed, in one sentence
-  unblock_condition: string,  // the observable event that clears it
-  blocked_on: "user" | "external_service" | "peer_agent",
+  op: "pause",
+  reason: string,             // why work cannot continue, one sentence
+  unblock_condition: string,  // the observable event that would clear it
 })
 ```
 
-Semantics:
+The handler should do what the existing interrupt path already does — `enabled = false`,
+`status = "paused"`, persist under `goal_paused` — plus store `reason` and
+`unblock_condition` on the goal record.
 
-- The goal stays **active and intact** — no deliverable is redefined, dropped, or
-  narrowed. `goal({op:"get"})` reports `status: "blocked"` with the reason.
-- **The autonomous loop stops re-invoking.** This is the whole point.
-- A `blocked` goal surfaces to the user immediately, with the reason as the headline —
-  the same prominence `complete` gets today.
-- Any user message auto-transitions `blocked → active` and resumes the loop, since a
-  reply is the most likely unblocking event. `goal({op:"resume"})` does it explicitly.
+Semantics to preserve:
 
-This makes the honest state representable. Today the agent must choose between lying and
-looping; with `block` it can be accurate and stop.
+- The goal stays **intact**. No deliverable is redefined, narrowed or discarded.
+  `goal({op:"get"})` reports `paused` with the reason.
+- The continuation loop stops via the existing `enabled && ahe(...)` gate. No gate change
+  should be needed — confirm this.
+- The pause **surfaces to the user immediately**, reason as the headline, at the same
+  prominence `complete` gets today. A silent pause is indistinguishable from a hang.
+- Any subsequent user message should auto-transition `paused → active`, since a reply is
+  overwhelmingly the unblocking event. `resume` remains the explicit path.
 
-**Guard against abuse.** `block` is an easier exit than finishing, so it must be
-expensive to reach:
+**Guard against abuse.** `pause` is an easier exit than finishing, so make it expensive:
 
-- Require `unblock_condition` to name an observable event, not a feeling. "Waiting for
-  confirmation to push to main" passes; "this is hard" does not.
-- Reject `block` if the session has made **zero** tool calls that changed state — a goal
+- Require `unblock_condition` to name an observable event. *"User confirmation to push to
+  main"* passes; *"this is hard"* does not.
+- Reject `pause` when the session has made **zero** state-changing tool calls — a goal
   cannot be blocked before any work is attempted.
-- Log every `block` with the reason so cheap blocking is visible in review, the way
-  `correction_cycles` makes cheap failure visible.
+- Log every pause with its reason, so cheap pausing is visible in review.
 
-### 2. Circuit-breaker on no-progress continuations — REQUIRED
+### 2. No-progress circuit breaker — REQUIRED, independent of #1
 
-Independent of #1, because #1 relies on the agent choosing to call it. The runtime should
-detect a spinning loop on its own.
+#1 depends on the agent choosing to call it. The runtime should detect a spinning loop by
+itself. Belongs in `packages/coding-agent/src/goals/runtime.ts`.
 
 After each continuation, fingerprint the turn:
 
 ```
 fingerprint = sha256(
-  git HEAD + dirty-file set + set of tool names called + last assistant message, normalised
+  git HEAD
+  + dirty-file set
+  + set of tool names called
+  + normalised last assistant message
 )
 ```
 
-If **two consecutive** continuations produce a fingerprint whose only difference is
-timestamps, stop the loop and surface to the user with the last assistant message as the
-report. Two, not three: by the second identical turn the evidence is conclusive, and each
-extra turn in this incident cost roughly 14,000 tokens.
+If **two consecutive** continuations produce fingerprints differing only in timestamps,
+stop the loop and surface the last assistant message as the report.
 
-This also catches the failure mode `block` cannot: an agent that is genuinely stuck but
-does not realise it.
+Two, not three: by the second identical turn the evidence is conclusive, and each extra
+turn in the observed incident cost roughly 14,000 tokens.
+
+This also catches what `pause` cannot — an agent genuinely stuck that has not realised it.
 
 ### 3. Declare required authorisations at goal creation — RECOMMENDED
 
-The deeper problem is that the gate was discovered at the *end*. The objective — "so that
-the sync **restarts**" — implied a production deploy from the first word, but that was
-only surfaced after all the work was done.
+The deeper problem is that the gate was discovered at the *end*. The objective — *"so that
+the sync **restarts**"* — implied a production deploy from its first word, but nothing
+surfaced that until all the work was done.
 
 ```ts
 goal({
@@ -187,30 +207,48 @@ goal({
 })
 ```
 
-At creation the runtime resolves each entry against standing policy and either records a
-grant or asks the human **once, up front**. An objective whose terminal step is
-unauthorised is then either pre-approved or known-partial from the start, and the agent
-plans against a truthful finish line: "PR open and reviewed" rather than "sync restarted".
+At creation, resolve each entry against standing policy: record a grant, or ask the human
+**once, up front**. A goal whose terminal step is unauthorised is then either pre-approved
+or known-partial from the start, and the agent plans against a truthful finish line —
+*"PR open and reviewed"* rather than *"sync restarted"*.
 
 Cheap heuristic for suggesting entries: objectives containing *deploy, ship, release,
 restart, roll out, go live, production* almost always terminate in a privileged action.
 
 ---
 
-## Why not the alternatives
+## Rejected alternatives
 
-**"Let the objective authorise the action."** No. The gate exists because an objective
-phrased as an outcome ("make it work") silently implies whatever action achieves it. That
-is exactly the reasoning a prompt-injection attack wants. Goal mode is already explicit
-that the objective is not a higher-priority instruction; the fix is to represent the
-blocked state, not to weaken the gate.
+**Let the objective authorise the privileged action.** No. An objective phrased as an
+outcome ("make it work") silently implies whatever action achieves it — precisely the shape
+of a prompt-injection escalation. Goal mode already declares the objective is not a
+higher-priority instruction. Represent the blocked state; do not weaken the gate.
 
-**"Let the agent call `drop`."** It misrepresents completed, committed, pushed work as
-abandoned, and it loses the deliverables from the goal record. Blocked and dropped are
-different facts and need different states.
+**Tell the agent to call `drop`.** Blocked and abandoned are different facts. `drop`
+misrepresents finished, committed work and loses the deliverables from the record.
 
-**"Cap continuations at N."** A blunt version of #2 that also truncates goals which are
-legitimately making slow progress. Fingerprint the *absence of change*, not the count.
+**Cap continuations at N.** A blunt version of #2 that also truncates goals making slow but
+real progress. Fingerprint the *absence of change*, not the count.
+
+**Prompt-only fix — soften `goal-continuation.md`.** Necessary but insufficient: without an
+agent-reachable exit, softer wording produces a politer infinite loop. The converse also
+holds — shipping the op without the prompt change leaves it dead weight, because today's
+continuation text offers no third option and the agent never learns the op exists.
+**Both are required.**
+
+---
+
+## Reproduction
+
+1. Create a goal whose terminal step needs an authorisation the agent does not have. The
+   easiest setup is a repo whose `CLAUDE.md` forbids pushing to `main` without explicit
+   confirmation, plus an objective phrased as "…so that X is live in production".
+2. Let the agent work. It will finish, open a PR, and report blocked.
+3. Do not reply.
+4. Observe: continuation turns repeat with no state change, indefinitely.
+
+Expected after the fix: the agent calls `pause`, or the circuit breaker fires after two
+identical turns. Either way the loop ends within ≤2 turns of the work completing.
 
 ---
 
@@ -218,9 +256,61 @@ legitimately making slow progress. Fingerprint the *absence of change*, not the 
 
 1. An agent that cannot proceed without a human decision can stop the loop without
    claiming completion or discarding work.
-2. Two consecutive no-change continuations end the loop automatically, whatever the agent
-   does.
-3. `goal({op:"get"})` distinguishes active, blocked, complete and dropped.
-4. A blocked goal surfaces its reason to the user as prominently as a completed one.
-5. Replaying this session against the fix costs **≤ 2** continuation turns after the PR is
-   opened, versus the 8 observed.
+2. Two consecutive no-change continuations end the loop automatically, regardless of what
+   the agent does.
+3. `goal({op:"get"})` distinguishes `active`, `paused`, `budget-limited`, `complete` and
+   `dropped`, and returns the pause reason.
+4. A paused goal surfaces its reason to the user as prominently as a completed one.
+5. `pause` is rejected when no state-changing work has occurred in the session.
+6. Replaying the reported session costs **≤ 2** continuation turns after the PR is opened,
+   against the 8 observed.
+
+---
+
+## Provenance — read before trusting identifiers
+
+Everything above was derived from the **shipped binary**, not from source:
+`/opt/homebrew/Cellar/omp/18.0.8/bin/omp` — 121 MB Mach-O, bundled JavaScript with
+source-path comments preserved.
+
+- Identifiers such as `ahe`, `uhe`, `#u`, `#c` are **minified bundle names**. Do not search
+  for them in source. Locate the equivalents via the quoted string literals instead:
+  `"budget-limited"`, `"goal_paused"`, `Continue active goal.`, `<goal_context>`.
+- Source paths recovered from bundle comments:
+
+```
+packages/coding-agent/src/goals/index.ts
+packages/coding-agent/src/goals/runtime.ts
+packages/coding-agent/src/goals/tools/goal-tool.ts
+packages/coding-agent/src/prompts/tools/goal.md
+packages/coding-agent/src/prompts/goals/goal-continuation.md
+packages/coding-agent/src/prompts/goals/goal-budget-limit.md
+packages/coding-agent/src/prompts/goals/goal-mode-active.md
+packages/coding-agent/src/prompts/goals/goal-mode-context.md
+packages/coding-agent/src/prompts/goals/goal-todo-context.md
+packages/coding-agent/src/prompts/goals/guided-goal-interview.md
+```
+
+**Not verified — confirm these first:**
+
+- that the continuation driver gates on `enabled && ahe(...)` in *every* path, so setting
+  `paused` is genuinely sufficient to stop it;
+- whether an automatic `paused → active` transition on the next user message already
+  exists, since the interrupt path reaches `paused` today;
+- whether `reason` / `unblock_condition` can be added to the persisted goal record without
+  a state-file migration.
+
+---
+
+## Appendix — not part of this report
+
+The same session surfaced two findings in a **different codebase**, the `vv-omp-harness`
+plugin. They are unrelated to goal mode and require no change for this issue. Noted only so
+an investigator does not conflate them:
+
+1. Its session gate prints *"If a gap is deliberate, say so explicitly in
+   `.harness/progress.txt` and continue"*, but nothing reads that file for a declaration —
+   the instruction cannot do what it implies.
+2. Its "blocks exactly once" guarantee is once *per settle attempt*. An outer loop driving
+   unbounded settle attempts makes it fire unbounded times. Neither component is
+   individually runaway; together they compound.
