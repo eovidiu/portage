@@ -52,6 +52,7 @@ This is the more interesting finding. The gate's safety property is stated as ab
 ("blocks exactly once") but is actually relative to how many times something tries to
 settle. Worth either restating in those terms, or tracking blocks per *session* rather than
 per stop event so an unfixable finding costs one turn total.
+
 ---
 
 ## What happened
